@@ -1,0 +1,21 @@
+Tests/TurboFieldfareServer/HTTPServerTests.swift
+  s_4311a4aa95bc7f::t_54c0d26cf54378 126-136,204-398,400-401
+  s_4311a4aa95bc7f::t_b71e91720609da 399
+  s_4311a4aa95bc7f::t_8626b7e209253b 402
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "7dcba35e0bebe0b5ffb20f59ebe3f587c914e6da",
+  "prompts": {},
+  "sessions": {
+    "s_4311a4aa95bc7f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fbe3a-1ca2-7101-ba1c-72401a9abc47",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "Vitalii Tverdokhlib <v@nitra.ai>"
+    }
+  }
+}
