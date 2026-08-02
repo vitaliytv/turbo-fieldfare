@@ -1,0 +1,24 @@
+Scripts/test.sh
+  s_4311a4aa95bc7f::t_5f34d9b7a47399 11-17,19-24,27-29
+  s_4311a4aa95bc7f::t_bdcc5aa4b3fce0 25
+  s_4311a4aa95bc7f::t_df7720ea012657 18,26
+  s_4311a4aa95bc7f::t_9717ceb1efe48a 30-36
+Sources/TurboFieldfareApp/Mac/Generation/OutputPaneView.swift
+  s_4311a4aa95bc7f::t_9717ceb1efe48a 463
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.20",
+  "base_commit_sha": "9d690e6a423e1f4bb2d2d356102254b49c516494",
+  "prompts": {},
+  "sessions": {
+    "s_4311a4aa95bc7f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fbe3a-1ca2-7101-ba1c-72401a9abc47",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "Vitalii Tverdokhlib <v@nitra.ai>"
+    }
+  }
+}
