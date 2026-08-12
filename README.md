@@ -226,22 +226,6 @@ This formats messages in the same way as the Mac app. The CLI response limit
 is set with `--max-new`, which defaults to 1,024 tokens. The Mac app can
 generate until the selected context window is full.
 
-#### Raw completion
-
-`--prompt` is available for raw completion and reproducible comparisons. It
-passes the text directly to the model without chat formatting. Use
-`--messages-file` for instruction-response conversations.
-
-```bash
-swift run -c release TurboFieldfareCLI \
-  --model scratch/gemma4.gturbo \
-  --prompt "The capital of France is" \
-  --max-new 64 \
-  --temperature 0
-```
-
-This example deliberately requests a short greedy completion.
-
 Common generation options include `--max-context`, `--temperature`, `--top-k`,
 `--top-p`, `--repetition-penalty`, `--seed`, and repeatable `--stop` strings.
 The public CLI uses production runtime defaults. Run the following command for
@@ -272,6 +256,28 @@ remote authentication or TLS.
 See [Local server](docs/OPENAI_SERVER.md) for a test request, Python and
 OpenCode setup, prompt reuse, tool handling, and the supported API subset.
 
+#### Batch requests
+
+The local server implements the OpenAI Files → Batch flow for non-streaming
+`/v1/chat/completions`: upload a `.jsonl` file with `purpose=batch` to `POST
+/v1/files`, then create a batch with its `input_file_id`, endpoint, and
+`completion_window: "24h"`; optional `output_expires_after` accepts
+`{"anchor":"created_at","seconds":3600...2592000}` and removes generated
+output/error JSONL after that interval. Each JSONL line contains `custom_id`, `method`,
+`url`, and the normal Chat Completions `body`.
+
+If a stored JSONL input fails Batch validation, creation returns a Batch in
+`failed` state with an `errors` list; malformed Batch request parameters still
+return the usual HTTP error envelope.
+
+`GET /v1/batches/{id}`, `POST /v1/batches/{id}/cancel`, and `GET /v1/batches`
+provide lifecycle status. Download `output_file_id` and, when present,
+`error_file_id` through `GET /v1/files/{id}/content`. Requests run through the
+same single-model queue as interactive requests; only Chat Completions batches
+are supported. Generated File objects expose the optional `expires_at` when an
+expiry policy is set. Batch and Files state is in-memory/process-local and is
+removed when the server restarts.
+
 ## Test and contribute
 
 Run the public test suite serially:
@@ -300,6 +306,9 @@ Prompt prefill uses chunks of up to 128 tokens so one fetched expert can serve
 multiple rows. Generation repeats the routed layer loop one token at a time.
 The installer applies the same bounded-memory rule: it repacks remote ranges
 directly into `.gturbo` without staging a full shard or tensor.
+
+For a video overview of TurboFieldfare, see Better Stack's
+[Local AI On Apple Silicon uses 7X Less RAM](https://youtu.be/vHhephsP6vU).
 
 For a visual introduction to the model architecture, see Maarten Grootendorst's
 [A Visual Guide to Gemma 4](https://newsletter.maartengrootendorst.com/p/a-visual-guide-to-gemma-4).

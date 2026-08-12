@@ -363,6 +363,15 @@ public actor ServerModelSession: ServerInferenceBackend {
         if let decodingError { throw decodingError }
         try decoder?.finish()
         if needsToolTemplate, result.reason == .toolCalls, calls.isEmpty {
+            // Друге джерело `malformed`, крім розбору самого виклику: модель
+            // завершила хід із причиною `toolCalls`, але жодного виклику не
+            // видала. Без цього рядка обидва шляхи в логу виглядають
+            // однаково, і незрозуміло, що саме сталося.
+            if ProcessInfo.processInfo.environment["TFF_LOG_TOOLCALL_RAW"] != nil {
+                FileHandle.standardError.write(Data(
+                    ("[toolcall-raw] finish=toolCalls, але жодного виклику не розібрано; "
+                     + "видимого тексту: \(content.count) символів\n").utf8))
+            }
             throw GemmaToolCallParserError.malformed
         }
         let tail = stopMatcher.finish()
