@@ -1,18 +1,18 @@
-# Rust migration and learning plan
+# План навчання та міграції на Rust
 
-## Outcome
+## Кінцевий результат
 
-The final product is terminal-only and implemented in Rust plus Metal Shading
-Language:
+Кінцевий продукт працює лише з термінала та реалізований на Rust і Metal
+Shading Language:
 
 ```text
-OpenAI clients
+OpenAI-клієнти
     |
     | HTTP/1.1, JSON, SSE
     v
 turbofieldfare-api (Rust)
     |
-    | versioned local IPC
+    | версіонований локальний IPC
     v
 turbofieldfare-worker (Rust)
     |
@@ -20,84 +20,84 @@ turbofieldfare-worker (Rust)
 Metal 4 / TensorOps / .gturbo
 ```
 
-The migration is deliberately hybrid. The OpenAI-compatible server is
-separated first and connected to the existing Swift/Metal inference runtime.
-The inference worker is then ported behind the same IPC contract. This keeps a
-working product and a correctness oracle throughout the Rust and inference
-learning process.
+Міграція навмисно гібридна. Спочатку відокремлюємо OpenAI-сумісний сервер і
+підключаємо його до наявного inference runtime на Swift/Metal. Потім переносимо
+inference worker на Rust, не змінюючи IPC-контракт. Так протягом усього навчання
+Rust та inference-технологіям у нас залишатимуться робочий продукт і еталон для
+перевірки коректності.
 
-This plan has two distinct tracks:
+План має два окремі напрями:
 
-1. **Behavioral migration:** reproduce the shipping behavior in Rust while
-   reusing the `.gturbo` format and existing Metal kernels.
-2. **Metal modernization:** after parity, evaluate newer Apple APIs and promote
-   only changes that pass correctness, quality, memory, and wall-time gates.
+1. **Міграція поведінки:** відтворити поточну поведінку на Rust, повторно
+   використовуючи формат `.gturbo` і наявні Metal kernels.
+2. **Модернізація Metal:** після досягнення паритету оцінити нові Apple API та
+   приймати лише зміни, які проходять перевірки коректності, якості, пам'яті й
+   повного часу виконання.
 
-Do not combine a language port with an optimization in the same milestone.
+Не поєднувати перенесення на іншу мову й оптимізацію в одному етапі.
 
-## Guiding constraints
+## Основні обмеження
 
-- Keep the public server on `127.0.0.1`; it has no remote authentication or
-  TLS.
-- Load the model in exactly one worker process.
-- Keep the authoritative one-active-generation queue in the worker. The API
-  may impose admission limits, but it must not be the only serialization
-  boundary.
-- Never transfer logits, KV buffers, weights, or other model-scale data over
-  IPC. Transfer normalized requests and text/tool/usage events only.
-- Preserve bounded memory, expert streaming, integrity checks, cancellation,
-  prompt-cache behavior, and Files/Batch semantics.
-- Preserve a Swift reference implementation until the Rust worker clears all
-  parity gates.
-- Keep existing `.metal` kernels during the host-language migration. Kernel
-  changes are separate experiments.
-- Do not delete UI, Swift server, CLI, repacker, or reference tests merely to
-  simplify an intermediate milestone.
+- Залишити публічний сервер на `127.0.0.1`: він не має віддаленої
+  автентифікації чи TLS.
+- Завантажувати модель рівно в одному worker-процесі.
+- Зберегти авторитетну чергу з одним активним generation у worker. API може
+  обмежувати прийом запитів, але не повинен бути єдиною межею серіалізації.
+- Не передавати через IPC logits, KV buffers, weights чи інші дані масштабу
+  моделі. Передавати лише нормалізовані запити та події text/tool/usage.
+- Зберегти обмежене використання пам'яті, expert streaming, integrity checks,
+  cancellation, prompt cache і семантику Files/Batch.
+- Зберігати еталонну Swift-реалізацію, доки Rust worker не пройде всі перевірки
+  паритету.
+- Не змінювати наявні `.metal` kernels під час міграції host language. Зміни
+  kernels мають бути окремими експериментами.
+- Не видаляти UI, Swift server, CLI, repacker або еталонні тести лише для
+  спрощення проміжного етапу.
 
-## Apple platform baseline
+## Базові практики Apple
 
-Use the project's [implementation references](IMPLEMENTATION_REFERENCES.md) as
-the maintained source index. The migration currently follows these Apple
-contracts and practices:
+Підтримуваним покажчиком джерел є [implementation references](IMPLEMENTATION_REFERENCES.md).
+Міграція спирається на такі Apple-контракти й практики:
 
 - [Metal Performance Primitives programming guide](https://developer.apple.com/download/files/Metal-Performance-Primitives-Programming-Guide.pdf)
-  for TensorOps tiling, cooperative tensors, data types, execution scopes, and
+  для TensorOps tiling, cooperative tensors, типів даних, execution scopes та
   alignment.
 - [Optimize custom machine learning operations with Metal tensors](https://developer.apple.com/videos/play/wwdc2026/330/)
-  for quantized tensors, TensorOps, cooperative reuse, and custom attention.
+  для quantized tensors, TensorOps, cooperative reuse і custom attention.
 - [Discover Metal 4](https://developer.apple.com/videos/play/wwdc2025/205/)
-  for modular adoption, command allocation, residency, barriers, and shader
-  compilation.
+  для модульного впровадження, command allocation, residency, barriers і
+  компіляції shaders.
 - [Metal resource loading](https://developer.apple.com/documentation/metal/resource-loading)
-  for evaluating Metal I/O queues against the existing bounded `pread` design.
+  для порівняння Metal I/O queues із наявною обмеженою реалізацією на `pread`.
 - [Metal developer tools](https://developer.apple.com/metal/tools/)
-  for API/Shader Validation, Metal Debugger, and Metal System Trace.
+  для API/Shader Validation, Metal Debugger і Metal System Trace.
 
-Recheck these sources and the Metal feature-set tables when raising the minimum
-macOS/Xcode version or adopting a new GPU-family path. A newer API is a
-candidate, not an automatic replacement for a measured production path.
+Під час підвищення мінімальної версії macOS/Xcode або додавання шляху для нової
+GPU family потрібно повторно перевірити ці джерела й таблиці Metal feature
+sets. Новіший API є кандидатом, а не автоматичною заміною виміряного
+production-шляху.
 
-## Target Cargo workspace
+## Цільовий Cargo workspace
 
-The workspace grows incrementally; all crates do not need to exist on day one.
+Workspace зростає поступово; не всі crates мають з'явитися першого дня.
 
 ```text
 rust/
   Cargo.toml
   crates/
-    protocol/          versioned IPC DTOs and shared fixtures
-    openai-api/        Axum routes, SSE, Files, and Batch
-    model-format/      .gturbo manifest, layout, and integrity
-    tokenizer/         tokenizer, chat template, and tool parsing
-    metal-runtime/     safe project API over objc2-metal
-    kernels/           Rust host wrappers for existing MSL kernels
-    inference/         model, KV cache, prefill, decode, and sampling
+    protocol/          версіоновані IPC DTO та спільні fixtures
+    openai-api/        Axum routes, SSE, Files і Batch
+    model-format/      manifest, layout та integrity для .gturbo
+    tokenizer/         tokenizer, chat template і tool parsing
+    metal-runtime/     безпечний API проєкту поверх objc2-metal
+    kernels/           Rust host wrappers для наявних MSL kernels
+    inference/         model, KV cache, prefill, decode і sampling
     worker/            inference IPC service
-    repack/            bounded streaming installer
+    repack/            installer з обмеженим streaming
     cli/               install, run, serve, inspect, compare, benchmark
 ```
 
-The intended dependency direction is:
+Бажаний напрям залежностей:
 
 ```text
 cli -> openai-api -> protocol <- worker -> inference
@@ -107,71 +107,71 @@ cli -> openai-api -> protocol <- worker -> inference
 repack -> model-format
 ```
 
-`protocol` must not depend on Axum, OpenAI SDK types, Swift types, or Metal.
+`protocol` не повинен залежати від Axum, OpenAI SDK types, Swift types або
+Metal.
 
-## Reusable Rust ecosystem
+## Повторне використання Rust-екосистеми
 
-Pin exact versions in `Cargo.lock` and review upgrades deliberately.
+Точні версії слід зафіксувати в `Cargo.lock`, а оновлення виконувати свідомо.
 
-| Concern | Initial crate choice |
+| Задача | Початковий вибір crate |
 | --- | --- |
 | Async runtime | `tokio` |
 | HTTP routing | `axum` |
 | HTTP limits, request IDs, tracing | `tower-http` |
-| OpenAI wire types | `openai-protocol` behind a local adapter |
+| OpenAI wire types | `openai-protocol` за локальним adapter |
 | Serialization | `serde`, `serde_json` |
 | IPC framing | `tokio-util` |
-| Cancellation and streams | `tokio-util`, `tokio-stream`, `futures-util` |
+| Cancellation і streams | `tokio-util`, `tokio-stream`, `futures-util` |
 | CLI | `clap` |
-| Errors and diagnostics | `thiserror`, `tracing`, `tracing-subscriber` |
+| Errors і diagnostics | `thiserror`, `tracing`, `tracing-subscriber` |
 | Metal bindings | `objc2`, `objc2-foundation`, `objc2-metal` |
-| FP16/BF16 and POD data | `half`, `bytemuck` |
-| Memory maps and POSIX I/O | `memmap2`, `rustix` |
-| Tokenization and templates | `tokenizers`, `minijinja` |
+| FP16/BF16 і POD data | `half`, `bytemuck` |
+| Memory maps і POSIX I/O | `memmap2`, `rustix` |
+| Tokenization і templates | `tokenizers`, `minijinja` |
 | Hub/range transport | `hf-hub`, `reqwest` |
-| Model sources | `safetensors` where source parsing benefits |
+| Model sources | `safetensors`, де це спрощує parsing |
 | Integrity | `sha2` |
-| Tests and microbenchmarks | `proptest`, `criterion` |
+| Tests і microbenchmarks | `proptest`, `criterion` |
 
-`openai-protocol` saves wire-type work, but does not replace
-TurboFieldfare-specific validation. Keep local rules for model IDs, `n=1`,
-sampling ranges, unsupported fields, tool choices, Gemma schema adaptation,
-historical tool calls, and actual context limits.
+`openai-protocol` скорочує роботу з wire types, але не замінює специфічну для
+TurboFieldfare валідацію. Локальними залишаються правила для model IDs, `n=1`,
+sampling ranges, unsupported fields, tool choices, адаптації Gemma schema,
+історичних tool calls і фактичних context limits.
 
-The older `metal` crate is deprecated. New Rust Metal work uses `objc2-metal`
-and confines Objective-C lifetime handling and `unsafe` code to
+Старий crate `metal` застарів. Нова Rust-реалізація Metal використовує
+`objc2-metal`, а робота з Objective-C lifetime та `unsafe` ізолюється в
 `metal-runtime`.
 
-## Phase 0: freeze the reference
+## Етап 0: зафіксувати еталон
 
-### Learning goals
+### Навчальні цілі
 
-- Distinguish exact output identity, numerical tolerance, model-quality parity,
-  and product-level HTTP compatibility.
-- Learn the current `.gturbo`, prefill, decode, MoE streaming, and measurement
-  contracts before translating them.
+- Розрізняти точну ідентичність результату, числову похибку, паритет якості
+  моделі та HTTP-сумісність на рівні продукту.
+- Вивчити поточні контракти `.gturbo`, prefill, decode, MoE streaming і
+  вимірювань до початку перенесення.
 
-### Deliverables
+### Результати
 
-- A named Swift reference commit and model-manifest hash.
-- Black-box HTTP fixtures for routes, errors, SSE, tools, Files, and Batch.
-- Tokenizer and rendered-prompt fixtures.
-- Kernel input/output fixtures and independent FP32 references.
-- Fixed-seed generation fixtures.
-- A recorded performance baseline using the existing community benchmark
-  protocol.
+- Визначені Swift reference commit і hash model manifest.
+- Black-box HTTP fixtures для routes, errors, SSE, tools, Files і Batch.
+- Fixtures для tokenizer і rendered prompts.
+- Fixtures input/output для kernels і незалежні FP32 references.
+- Generation fixtures із фіксованим seed.
+- Зафіксований performance baseline за чинним community benchmark protocol.
 
-Record commit, hardware, RAM, macOS, Swift/Rust/Xcode versions, exact commands,
-exit codes, timing footers, energy mode, and protocol deviations.
+Фіксувати commit, hardware, RAM, версії macOS/Swift/Rust/Xcode, точні команди,
+exit codes, timing footers, energy mode і всі відхилення від протоколу.
 
-### Exit gate
+### Критерій завершення
 
-The same external contract suite can run against an arbitrary base URL, and
-the reference benchmark can be repeated without editing source.
+Один і той самий набір тестів зовнішнього контракту запускається для довільного
+base URL, а еталонний benchmark повторюється без редагування source code.
 
-## Phase 1: Rust OpenAI server with a mock backend
+## Етап 1: Rust OpenAI server із mock backend
 
-Start with only:
+Почати лише з:
 
 ```text
 protocol
@@ -179,46 +179,46 @@ openai-api
 cli
 ```
 
-Implement:
+Реалізувати:
 
 - `GET /health`
 - `GET /v1/models`
 - `POST /v1/chat/completions`
 - non-streaming responses
-- SSE chunks, heartbeat, usage chunk, and `[DONE]`
+- SSE chunks, heartbeat, usage chunk і `[DONE]`
 - OpenAI error envelopes
-- 1 MiB normal request-body limit
-- request cancellation and bounded backpressure
-- structured request and phase logging
+- ліміт звичайного request body 1 MiB
+- request cancellation та обмежений backpressure
+- структуроване логування request і phase
 
-The mock backend emits deterministic `prepared`, `content`, `tool_call`,
-`completed`, and `failed` events. It must support slow-client and cancellation
-tests without a model.
+Mock backend генерує детерміновані події `prepared`, `content`, `tool_call`,
+`completed` і `failed`. Він має дозволяти тестувати slow clients і cancellation
+без моделі.
 
-### Learning goals
+### Навчальні цілі
 
-- Rust ownership, enums, traits, and error handling.
-- Tokio tasks, channels, cancellation, and stream lifetimes.
-- Axum extractors/responses and SSE backpressure.
-- Serde compatibility and protocol-oriented testing.
+- Ownership, enums, traits і error handling у Rust.
+- Tokio tasks, channels, cancellation і stream lifetimes.
+- Axum extractors/responses та SSE backpressure.
+- Сумісність Serde і protocol-oriented testing.
 
-### Exit gate
+### Критерій завершення
 
 - `cargo fmt --check`
 - `cargo clippy --workspace --all-targets -- -D warnings`
 - `cargo test --workspace`
-- HTTP contract fixtures pass for implemented routes.
-- Disconnecting a streaming client cancels the mock generation.
-- Slow clients cannot cause unbounded buffering.
+- HTTP contract fixtures проходять для реалізованих routes.
+- Від'єднання streaming client скасовує mock generation.
+- Повільні clients не спричиняють необмежену буферизацію.
 
-## Phase 2: versioned IPC v1
+## Етап 2: версіонований IPC v1
 
-Use a Unix domain socket with a fixed-size length prefix and JSON payload. JSON
-keeps the first protocol easy to inspect from both Swift and Rust; framing
-removes newline ambiguity.
+Використати Unix domain socket із префіксом довжини фіксованого розміру та JSON
+payload. JSON робить першу версію протоколу зручною для перевірки зі Swift і
+Rust, а framing усуває неоднозначність newline.
 
-Every frame includes `protocol_version`, `type`, and `request_id` where
-applicable. Initial messages are:
+Кожен frame містить `protocol_version`, `type` і, де доречно, `request_id`.
+Початкові messages:
 
 ```text
 hello
@@ -234,161 +234,161 @@ ping / pong
 shutdown
 ```
 
-`ready` advertises worker capabilities such as model ID, maximum context,
-tool support, prompt-cache mode, and maximum concurrency. The protocol includes
-explicit queue-full, worker-busy, invalid-request, model-error, cancelled, and
-internal-error categories.
+`ready` оголошує capabilities worker: model ID, maximum context, tool support,
+prompt-cache mode та maximum concurrency. Протокол містить явні категорії
+queue-full, worker-busy, invalid-request, model-error, cancelled і
+internal-error.
 
-### Ownership boundary
+### Межа відповідальності
 
-Rust API owns:
+Rust API відповідає за:
 
-- HTTP and OpenAI wire compatibility
-- generic OpenAI field validation
-- SSE and response envelopes
-- request IDs, body limits, Files, and Batch
+- HTTP і OpenAI wire compatibility
+- загальну валідацію OpenAI fields
+- SSE і response envelopes
+- request IDs, body limits, Files і Batch
 
-Inference worker owns:
+Inference worker відповідає за:
 
-- tokenizer and Gemma chat template
+- tokenizer і Gemma chat template
 - Gemma-specific tool-schema validation
-- actual token-context validation
-- generation queue and prompt/KV cache
-- sampling, inference, Metal, and usage accounting
+- фактичну валідацію token context
+- generation queue і prompt/KV cache
+- sampling, inference, Metal та usage accounting
 
-### Exit gate
+### Критерій завершення
 
-- Rust protocol round-trip and malformed-frame tests pass.
-- Swift and Rust decode the same golden frames.
-- Unknown protocol versions fail before generation.
-- Frame and queue sizes are bounded.
-- Cancellation is idempotent and correlated by request ID.
+- Проходять Rust-тести protocol round-trip і malformed frames.
+- Swift і Rust декодують однакові golden frames.
+- Невідомі protocol versions відхиляються до початку generation.
+- Розміри frames і queues обмежені.
+- Cancellation ідемпотентний і пов'язаний із request ID.
 
-## Phase 3: Swift inference worker
+## Етап 3: Swift inference worker
 
-Create a terminal-only `TurboFieldfareWorker` executable over the existing
-`ServerModelSession`. It opens no TCP port and contains no OpenAI response
-formatting.
+Створити terminal-only executable `TurboFieldfareWorker` поверх наявного
+`ServerModelSession`. Він не відкриває TCP port і не форматує OpenAI responses.
 
-Startup sequence:
+Послідовність запуску:
 
-1. Bind or connect to the configured Unix socket.
-2. Load and verify one `.gturbo` model.
-3. Publish `ready` only after the model and tokenizer are usable.
-4. Serialize all real inference through the worker coordinator.
-5. Stream events and honor cancellation.
-6. Shut down cleanly on the owning supervisor's signal.
+1. Bind або connect до налаштованого Unix socket.
+2. Завантажити й перевірити одну `.gturbo` model.
+3. Опублікувати `ready` лише після готовності model і tokenizer.
+4. Серіалізувати весь реальний inference через worker coordinator.
+5. Стрімити events і виконувати cancellation.
+6. Коректно завершуватися за signal від supervisor-власника.
 
-### Exit gate
+### Критерій завершення
 
-- Rust API plus Swift worker passes the old Swift server's HTTP contract suite.
-- Text, Unicode, tool calls, finish reasons, errors, and usage match.
-- Interactive and Batch work share the same authoritative worker queue.
-- A worker crash becomes a controlled HTTP `503`.
-- An API restart can reconnect without loading a second model.
-- TTFT regression is at most 5%.
-- Decode throughput remains at least 98% of the in-process Swift baseline.
-- IPC memory remains bounded under long responses and slow clients.
+- Rust API разом зі Swift worker проходить HTTP contract suite старого Swift
+  server.
+- Text, Unicode, tool calls, finish reasons, errors і usage збігаються.
+- Interactive і Batch робота використовують одну авторитетну worker queue.
+- Падіння worker перетворюється на контрольований HTTP `503`.
+- Перезапуск API може відновити з'єднання без завантаження другої моделі.
+- Регресія TTFT не перевищує 5%.
+- Decode throughput становить щонайменше 98% від in-process Swift baseline.
+- IPC memory залишається обмеженою для довгих responses і slow clients.
 
-At this point, Rust is the primary OpenAI-compatible server. Keep the SwiftNIO
-server as a reference until Files/Batch and failure behavior have full parity.
+На цьому етапі Rust стає основним OpenAI-сумісним server. SwiftNIO server
+залишається еталоном до повного паритету Files/Batch і failure behavior.
 
-## Phase 4: move Files and Batch to Rust
+## Етап 4: перенести Files і Batch на Rust
 
-Implement the remaining API surface in `openai-api`:
+Реалізувати решту API surface в `openai-api`:
 
-- multipart file upload with an explicit 200 MiB limit
-- file list, status, content, and delete
+- multipart file upload із явним лімітом 200 MiB
+- file list, status, content і delete
 - JSONL validation
-- Batch create, list, status, cancel, expiry, and pagination
-- output and error JSONL files
-- current metadata and compatibility limits
+- Batch create, list, status, cancel, expiry і pagination
+- output та error JSONL files
+- поточні metadata і compatibility limits
 
-Batch submits ordinary generation requests over IPC. It never bypasses the
-worker's serialization boundary.
+Batch надсилає звичайні generation requests через IPC і ніколи не обходить
+межу серіалізації worker.
 
-### Exit gate
+### Критерій завершення
 
-- Full black-box HTTP contract suite passes against Rust.
-- Batch status transitions and result/error JSONL match.
-- Cancellation reaches queued and active work correctly.
-- Server restart semantics are explicit and tested.
-- SwiftNIO is no longer needed in the production launch path.
+- Повний black-box HTTP contract suite проходить із Rust.
+- Batch status transitions і result/error JSONL збігаються.
+- Cancellation правильно доходить до queued та active work.
+- Семантика server restart явно визначена й протестована.
+- SwiftNIO більше не потрібен у production launch path.
 
-## Phase 5: Rust `.gturbo` and tokenizer layer
+## Етап 5: Rust-шар `.gturbo` і tokenizer
 
-Port without Metal execution:
+Перенести без Metal execution:
 
-- manifest and verified-install receipt parsing
-- architecture and quantization validation
-- resident index and packed-expert layout
-- file sizes, hashes, offsets, strides, and alignment
-- tokenizer load, encode, decode, and streaming decode
+- parsing manifest і verified-install receipt
+- валідацію architecture та quantization
+- resident index і packed-expert layout
+- file sizes, hashes, offsets, strides і alignment
+- load, encode, decode та streaming decode tokenizer
 - pinned Jinja chat template
-- structured assistant/tool-call parsing
+- parsing structured assistant/tool-call
 
-Keep `.gturbo` unchanged. A simultaneous model-format redesign would remove the
-ability to compare hosts independently.
+Не змінювати `.gturbo`. Одночасна зміна model format забере можливість
+незалежно порівнювати host-реалізації.
 
-### Exit gate
+### Критерій завершення
 
-- Manifest and layout interpretation match Swift exactly.
-- Token IDs and rendered prompts match golden fixtures.
-- Tool-call structures match.
-- Corrupt, truncated, misaligned, or incompatible models fail closed.
-- No test or loader stages a model-scale tensor in the Rust heap.
+- Інтерпретація manifest і layout точно збігається зі Swift.
+- Token IDs і rendered prompts збігаються з golden fixtures.
+- Tool-call structures збігаються.
+- Corrupt, truncated, misaligned або incompatible models безпечно відхиляються.
+- Жоден test або loader не розміщує tensor масштабу моделі в Rust heap.
 
-## Phase 6: Rust Metal foundation
+## Етап 6: фундамент Metal на Rust
 
-Create a small safe project API over `objc2-metal` for:
+Створити невеликий безпечний API проєкту поверх `objc2-metal` для:
 
-- device and capability discovery
-- command queues, command buffers, and compute encoders
-- buffers and no-copy ownership
-- library/function/pipeline creation
+- device і capability discovery
+- command queues, command buffers і compute encoders
+- buffers і no-copy ownership
+- створення library/function/pipeline
 - function constants
 - dispatch geometry
-- completion, error propagation, and synchronization
-- labels and diagnostics
+- completion, error propagation і synchronization
+- labels і diagnostics
 
-Confine Objective-C object-lifetime handling and all unavoidable `unsafe` to
-this crate. Document every `unsafe` block's ownership, alignment, lifetime, and
-synchronization invariants.
+Роботу з Objective-C object lifetime і весь неминучий `unsafe` ізолювати в
+цьому crate. Для кожного `unsafe` block документувати інваріанти ownership,
+alignment, lifetime і synchronization.
 
-Learning exercises progress through vector addition, buffer round trips,
-function constants, pipeline caching, and error/cancellation handling before
-any model kernel.
+Навчальні вправи мають пройти від vector addition через buffer round trips,
+function constants і pipeline caching до error/cancellation handling, перш ніж
+торкатися kernels моделі.
 
-Production builds ship an ahead-of-time compiled `.metallib`. Runtime source
-compilation may remain as an explicit development fallback. Install and pin the
-Xcode Metal Toolchain before this phase.
+Production builds постачають попередньо скомпільований `.metallib`. Runtime
+source compilation може залишитися явним development fallback. До цього етапу
+потрібно встановити й зафіксувати Xcode Metal Toolchain.
 
-### Exit gate
+### Критерій завершення
 
-- Metal API and Shader Validation are clean.
-- CPU reference tests pass.
-- Resource drops cannot race in-flight GPU work.
-- Pipeline compilation and cache errors are observable.
-- Release startup does not require runtime MSL compilation.
+- Metal API і Shader Validation не показують помилок.
+- CPU reference tests проходять.
+- Звільнення resources не може змагатися з GPU work у виконанні.
+- Помилки pipeline compilation і cache спостережувані.
+- Release startup не потребує runtime MSL compilation.
 
-## Phase 7: port kernel host wrappers
+## Етап 7: перенести host wrappers для kernels
 
-Reuse the existing MSL and replace only Swift host orchestration. Recommended
-order:
+Повторно використати наявний MSL і замінити лише Swift host orchestration.
+Рекомендований порядок:
 
 1. embedding lookup
 2. RMSNorm
 3. RoPE
 4. INT8 affine GEMV
 5. INT4 affine GEMV
-6. logit softcap and sampling
+6. logit softcap і sampling
 7. attention
 8. fused QKV paths
 9. shared expert
 10. routed MoE
-11. fused layer tail and language-model head
+11. fused layer tail і language-model head
 
-Compare three independent paths where practical:
+Де можливо, порівнювати три незалежні шляхи:
 
 ```text
 CPU FP32 reference
@@ -396,159 +396,162 @@ Swift host + production MSL
 Rust host + production MSL
 ```
 
-Unchanged kernels and inputs should produce exact or established-tolerance
-parity. Reordered TensorOps kernels require a direct numerical oracle plus
-model-quality gates, not identity with one reduction order.
+Незмінені kernels та inputs мають давати точний результат або вкладатися у
+встановлену похибку. Kernels із переставленими TensorOps потребують прямого
+числового еталона та перевірок якості моделі, а не тотожності одному порядку
+reduction.
 
-## Phase 8: model memory and expert streaming
+## Етап 8: пам'ять моделі та expert streaming
 
-Port:
+Перенести:
 
-- read-only mapping of common weights
+- read-only mapping спільних weights
 - no-copy Metal buffer wrapping
 - aligned expert-slot allocation
 - positional `pread`
-- lazy layer opening and verification
-- 16-slot LFU cache with recency tie-break
+- lazy layer opening і verification
+- LFU cache на 16 slots із recency tie-break
 - parallel bounded reads
-- slot ownership until all GPU consumers finish
-- cached-hit and missing-expert scheduling
+- ownership slot до завершення всіх GPU consumers
+- планування cached hits і missing experts
 
-First reproduce the current `pread` path. Evaluate `MTLIOCommandQueue` only as
-a separate control/candidate experiment; its existence does not prove it is
-better for small dynamically selected MoE experts.
+Спочатку відтворити поточний шлях `pread`. `MTLIOCommandQueue` оцінювати лише як
+окремий control/candidate experiment: наявність API не доводить переваги для
+малих, динамічно вибраних MoE experts.
 
-### Exit gate
+### Критерій завершення
 
-- Slot bytes and cache plans match Swift fixtures.
-- No slot is reused before GPU completion.
-- Cancellation cannot strand a slot in an ambiguous state.
-- Cold and warm I/O behavior is measured separately.
-- Physical footprint and file-cache effects are reported separately.
+- Slot bytes і cache plans збігаються зі Swift fixtures.
+- Slot не використовується повторно до GPU completion.
+- Cancellation не залишає slot у невизначеному стані.
+- Cold і warm I/O вимірюються окремо.
+- Physical footprint і вплив file cache звітуються окремо.
 
-## Phase 9: Rust decode worker
+## Етап 9: Rust decode worker
 
-Port:
+Перенести:
 
-- model ownership and runtime configuration
-- FP16 sliding-window and full-attention KV caches
-- 30-layer forward loop
-- `cb1 -> CPU top-8 -> expert I/O -> cb2` scheduling
-- shared-expert/read overlap
-- tied head, sampling, stops, and detokenization
-- prompt continuation and cancellation
+- model ownership і runtime configuration
+- FP16 sliding-window та full-attention KV caches
+- forward loop із 30 layers
+- планування `cb1 -> CPU top-8 -> expert I/O -> cb2`
+- overlap shared-expert/read
+- tied head, sampling, stops і detokenization
+- prompt continuation і cancellation
 
-The first correct end-to-end milestone may prefill token by token through the
-decode path. It is intentionally slow but isolates decode correctness before
-chunked prefill complexity.
+Перший коректний end-to-end milestone може виконувати prefill token-by-token
+через decode path. Це навмисно повільно, але ізолює коректність decode до
+додавання складності chunked prefill.
 
-Expose the Rust worker through the same IPC v1 contract:
+Rust worker використовує той самий IPC v1 contract:
 
 ```bash
 turbofieldfare serve --worker swift
 turbofieldfare serve --worker rust
 ```
 
-### Exit gate
+### Критерій завершення
 
-- First-token and fixed-prefix token parity pass where operation order matches.
-- Fixed-seed sampling and stop reasons match.
-- KV ring wraparound and continuation pass.
-- All error, cancellation, and shutdown paths are bounded.
-- Rust API requires no changes to switch worker languages.
+- Проходить паритет first token і fixed prefix там, де operation order
+  збігається.
+- Fixed-seed sampling і stop reasons збігаються.
+- KV ring wraparound і continuation проходять.
+- Усі error, cancellation і shutdown paths обмежені.
+- Для зміни мови worker не потрібно змінювати Rust API.
 
-## Phase 10: Rust prefill and Apple tensor paths
+## Етап 10: Rust prefill і Apple tensor paths
 
-Port the production behavior before introducing new policies:
+Спочатку перенести production behavior без нових політик:
 
-- 128-token chunks
-- projection- and shape-specific GEMV/QMM selection
-- bounded reusable scratch
+- chunks по 128 tokens
+- вибір GEMV/QMM залежно від projection і shape
+- обмежений reusable scratch
 - staged affine INT4 Metal Performance Primitives path
 - batched routed MoE
-- final-row-only language-model head
+- language-model head лише для фінального row
 - Apple10 TensorOps full-attention path
-- causal-tiled fallback for earlier GPU families
+- causal-tiled fallback для попередніх GPU families
 
-Use capability-based selection, not chip-name assumptions. TensorOps is the
-preferred portable MSL primitive where its shape wins, and uses the M5 neural
-accelerators for dense compute such as LLM prefill. Single-token decode remains
-bandwidth-oriented and keeps custom packed GEMV paths unless measurement proves
-otherwise.
+Вибір має залежати від capabilities, а не від назви chip. TensorOps є бажаним
+portable MSL primitive там, де виграє його shape, і використовує neural
+accelerators M5 для dense compute на кшталт LLM prefill. Single-token decode
+залишається bandwidth-oriented і зберігає custom packed GEMV paths, доки
+вимірювання не доведуть перевагу іншого підходу.
 
-### Exit gate
+### Критерій завершення
 
-- 121, 527, 1,017, and 3,707-token prefill gates pass.
-- Full-attention gates cover 8K, 16K, 32K, and 64K.
-- Apple10 TensorOps and earlier-family fallback both pass.
-- Direct numerical checks, delta-NLL, top-1/top-k, output quality, and bounded
-  RSS pass.
-- The Rust path matches or exceeds the accepted Swift performance envelope.
+- Проходять prefill gates для 121, 527, 1 017 і 3 707 tokens.
+- Full-attention gates покривають 8K, 16K, 32K і 64K.
+- Проходять і Apple10 TensorOps, і fallback для попередніх families.
+- Проходять direct numerical checks, delta-NLL, top-1/top-k, output quality та
+  bounded RSS.
+- Rust path відповідає прийнятому Swift performance envelope або перевищує
+  його.
 
-## Phase 11: Metal 4 modernization experiments
+## Етап 11: експерименти з модернізації Metal 4
 
-After Rust parity, evaluate each feature independently:
+Після паритету Rust незалежно оцінити:
 
-- ahead-of-time libraries and Metal 4 compilation workflow
+- ahead-of-time libraries і Metal 4 compilation workflow
 - command allocator reuse
 - argument tables
 - residency sets
 - explicit pass/queue barriers
 - parallel command encoding
 - Metal I/O queues
-- native quantized tensors and scale planes where format-compatible
-- Morton-order dispatch for large tensor tiles
+- native quantized tensors і scale planes, де вони сумісні з format
+- Morton-order dispatch для великих tensor tiles
 
-Adopt Apple APIs modularly. Each experiment needs a named production control,
-representative short/medium/long shapes, capability fallback, correctness and
-quality checks, and whole-operation wall time.
+Apple API впроваджувати модульно. Кожен експеримент потребує визначеного
+production control, репрезентативних short/medium/long shapes, capability
+fallback, перевірок коректності та якості й повного wall time операції.
 
-Do not promote a change because allocations or an isolated kernel improved.
-The acceptance metric is the current end-to-end bottleneck. Use Metal API and
-Shader Validation, Metal Debugger, Metal System Trace, and release-mode product
-measurements.
+Не приймати зміну лише через покращення allocations або isolated kernel.
+Критерієм є поточне end-to-end bottleneck. Використовувати Metal API and Shader
+Validation, Metal Debugger, Metal System Trace і release-mode вимірювання
+продукту.
 
-## Phase 12: Rust installer and repacker
+## Етап 12: Rust installer і repacker
 
-Port the repacker last. Preserve:
+Переносити repacker останнім. Зберегти:
 
-- pinned model revision and accepted source index
+- pinned model revision і accepted source index
 - bounded HTTP range downloads
-- no full checkpoint or shard on disk
+- відсутність повного checkpoint або shard на disk
 - tile-sized scratch
-- direct writes into the final resident/expert layout
+- прямий запис у фінальний resident/expert layout
 - durable range checkpoints
-- cancellation and resume
+- cancellation і resume
 - explicit partial discard
-- hashes, receipt binding, advisory locking, and atomic promotion
+- hashes, receipt binding, advisory locking і atomic promotion
 
-`hf-hub` may provide Hub metadata and authentication, but the implementation
-must retain bounded range transport rather than silently downloading complete
-source shards.
+`hf-hub` може надати Hub metadata та authentication, але реалізація має
+зберегти bounded range transport, а не непомітно завантажувати повні source
+shards.
 
-### Exit gate
+### Критерій завершення
 
-- Rust output is byte-identical to the accepted `.gturbo` contract.
-- Interrupted installs resume after verifying completed ranges.
-- Damaged ranges are redownloaded.
-- Peak scratch remains bounded.
-- No full source checkpoint is staged.
+- Rust output побайтово ідентичний прийнятому контракту `.gturbo`.
+- Перервані installs продовжуються після перевірки завершених ranges.
+- Пошкоджені ranges завантажуються повторно.
+- Peak scratch залишається обмеженим.
+- Повний source checkpoint не створюється.
 
-## Phase 13: terminal-only cutover
+## Етап 13: перехід до terminal-only продукту
 
-Remove components in this order:
+Видаляти компоненти в такому порядку:
 
-1. Stop building UI targets by default.
-2. Remove SwiftNIO after full Rust API parity.
-3. Make the Rust worker the default after inference parity.
-4. Retain the Swift worker as a named reference backend for a stabilization
-   window.
-5. Remove Swift CLI after Rust `run`, `inspect`, and `benchmark` parity.
-6. Remove Swift repacker after installer parity.
-7. Port remaining reference tests and archive a final Swift reference tag.
-8. Remove SwiftPM, Mac UI, decode service, and Swift sources.
+1. Припинити збирати UI targets за замовчуванням.
+2. Видалити SwiftNIO після повного паритету Rust API.
+3. Зробити Rust worker типовим після досягнення inference parity.
+4. Зберігати Swift worker як іменований reference backend протягом
+   stabilization window.
+5. Видалити Swift CLI після паритету Rust-команд `run`, `inspect` і `benchmark`.
+6. Видалити Swift repacker після паритету installer.
+7. Перенести решту reference tests і створити фінальний Swift reference tag.
+8. Видалити SwiftPM, Mac UI, decode service і Swift sources.
 
-Final user-facing commands are terminal-only:
+Фінальні команди користувача працюють лише в терміналі:
 
 ```bash
 turbofieldfare install --output scratch/gemma4.gturbo
@@ -558,60 +561,60 @@ turbofieldfare inspect --model scratch/gemma4.gturbo
 turbofieldfare benchmark --model scratch/gemma4.gturbo
 ```
 
-`serve` may supervise separate API and worker processes while remaining one
-operator command.
+`serve` може керувати окремими API і worker processes, залишаючись однією
+командою для оператора.
 
-## Cross-cutting acceptance gates
+## Наскрізні приймальні критерії
 
-No component is removed until the replacement meets all applicable gates:
+Компонент не видаляється, доки заміна не пройде всі відповідні перевірки:
 
-| Dimension | Gate |
+| Вимір | Критерій |
 | --- | --- |
-| HTTP | Complete black-box contract parity |
-| Correctness | Kernel/reference and generation fixtures pass |
-| Quality | Accepted delta-NLL and top-k agreement gates pass |
-| Decode | At least 98% of the frozen Swift baseline |
-| Prefill | At least 95% on fallback; no M5 TensorOps regression |
-| TTFT | No more than 5% regression |
-| Memory | No more than 10% physical-footprint regression |
-| I/O | Bounded reads, slots, descriptors, and queues |
-| Cancellation | HTTP -> API -> worker -> Metal lifecycle verified |
-| Safety | No second model process; no remote unauthenticated exposure |
+| HTTP | Повний паритет black-box contract |
+| Коректність | Проходять kernel/reference і generation fixtures |
+| Якість | Проходять прийняті gates для delta-NLL і top-k agreement |
+| Decode | Не менше 98% зафіксованого Swift baseline |
+| Prefill | Не менше 95% для fallback; без регресії M5 TensorOps |
+| TTFT | Регресія не більше 5% |
+| Пам'ять | Регресія physical footprint не більше 10% |
+| I/O | Обмежені reads, slots, descriptors і queues |
+| Cancellation | Перевірено lifecycle HTTP -> API -> worker -> Metal |
+| Безпека | Немає другого model process і віддаленого доступу без auth |
 
-These are initial migration gates, not permanent performance ceilings. Tighten
-them after Rust measurements become stable.
+Це початкові migration gates, а не постійні межі продуктивності. Після
+стабілізації вимірювань Rust їх слід посилити.
 
-## Learning cadence
+## Ритм навчання
 
-Use small, reviewable milestones. Every milestone should contain:
+Працювати малими етапами, зручними для review. Кожен етап має містити:
 
-1. one explicit Rust or inference learning objective;
-2. one bounded product capability;
-3. independent correctness evidence;
-4. a named benchmark only when performance can change;
-5. documentation of assumptions and rejected alternatives.
+1. одну явну навчальну ціль щодо Rust або inference;
+2. одну обмежену можливість продукту;
+3. незалежні докази коректності;
+4. визначений benchmark лише тоді, коли може змінитися performance;
+5. документацію припущень і відхилених альтернатив.
 
-Avoid long rewrites that first run after months of work. The intended sequence
-of visible wins is:
+Уникати великих переписувань, які вперше запускаються через місяці роботи.
+Послідовність видимих результатів:
 
 ```text
 Rust HTTP mock
 -> Rust API + Swift worker
--> full Rust OpenAI surface
--> Rust model/tokenizer inspection
--> first Rust-hosted Metal kernel
--> kernel parity
--> first Rust-generated token
+-> повний OpenAI API на Rust
+-> перевірка model/tokenizer на Rust
+-> перший Metal kernel із Rust host
+-> паритет kernels
+-> перший token, згенерований Rust
 -> Rust decode
 -> Rust prefill
--> Rust production worker
--> Rust installer
--> removal of Swift and UI
+-> production worker на Rust
+-> installer на Rust
+-> видалення Swift і UI
 ```
 
-## Immediate milestone
+## Найближчий етап
 
-The first implementation PR after this plan should create the Cargo workspace,
-IPC DTO crate, mock backend, and Rust implementations of `/health`, `/v1/models`,
-and `/v1/chat/completions` with non-streaming plus SSE contract tests. It must
-not modify inference runtime behavior or delete existing Swift targets.
+Перший implementation PR після цього плану має створити Cargo workspace, crate
+з IPC DTO, mock backend і Rust-реалізації `/health`, `/v1/models` та
+`/v1/chat/completions` із non-streaming і SSE contract tests. Він не повинен
+змінювати поведінку inference runtime або видаляти наявні Swift targets.
