@@ -65,3 +65,25 @@ During chunked prefill, the phase label reports exact progress, for example
 `Prefill (128/514)`. Errors and unsupported configurations appear only when
 they occur. RDADVISE remains experimental and is off by default. A measured
 result is a data point, not a performance ceiling.
+
+## Tool-call diagnostics
+
+`GemmaToolCallParserError.malformed` reaches the client as a bare
+`500 generation failed`, and the log line alone cannot say which of the two
+sources produced it: the parser rejecting the emitted call, or a turn that
+finished with `toolCalls` while no call was decoded.
+
+Set `TFF_LOG_TOOLCALL_RAW=1` to print the diagnosis to stderr:
+
+| Case | Output |
+| --- | --- |
+| Parser rejected the call | The parse error and the raw decoded text between `<<<` and `>>>`, special tokens intact (`<\|"\|>` shows as written). |
+| Turn ended with no call | A single line naming the case and the visible-text length. |
+
+The raw text is the only way to tell a model-side generation defect from a
+parser gap. In one investigation it showed the model closing `edits:[{` with
+`]` instead of `}` — the parser was right to reject it, and the fix belonged
+in the client's tool schema, not here.
+
+The variable is off by default: the raw text can carry file contents from tool
+arguments, so it is a debugging aid, not a production setting.
