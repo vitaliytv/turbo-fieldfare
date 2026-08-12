@@ -81,6 +81,15 @@ public final class StructuredAssistantDecoder: @unchecked Sendable {
                 emittedCalls += 1
                 return events + [.toolCall(call)]
             } catch {
+                // Діагностика: без сирого тексту неможливо зрозуміти, ЩО саме
+                // модель видала — помилка `malformed` сама по собі не каже
+                // нічого. Вмикається змінною середовища, щоб не засмічувати
+                // стандартний вивід у звичайних прогонах.
+                if ProcessInfo.processInfo.environment["TFF_LOG_TOOLCALL_RAW"] != nil {
+                    FileHandle.standardError.write(Data((
+                        "[toolcall-raw] parse failed: \(error)\n"
+                        + "[toolcall-raw] text=<<<\(text)>>>\n").utf8))
+                }
                 failed = true
                 throw error
             }

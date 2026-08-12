@@ -94,3 +94,23 @@ than the one-off it was.
 Reasons name conditions and counts, never message content, so the variable is
 safe to leave on. It is read per miss, and the reason string is built only when
 the variable is set.
+## Tool-call diagnostics
+
+A rejected tool call is reported by kind, but the kind alone cannot say what
+the model actually emitted, and the emitted text is gone by the time the error
+surfaces.
+
+Set `TFF_LOG_TOOLCALL_RAW=1` to print the parse error together with the raw
+decoded text between `<<<` and `>>>`, special tokens intact (`<\|"\|>` shows as
+written).
+
+A turn that finishes with `toolCalls` while no call was decoded needs no flag:
+it carries its own kind, `orphan_tool_response`.
+
+The raw text is the only way to tell a model-side generation defect from a
+parser gap. In one investigation it showed the model closing `edits:[{` with
+`]` instead of `}` — the parser was right to reject it, and the fix belonged
+in the client's tool schema, not here.
+
+The variable is off by default: the raw text can carry file contents from tool
+arguments, so it is a debugging aid, not a production setting.
