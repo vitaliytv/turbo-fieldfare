@@ -18,6 +18,7 @@ xcuserdata/
 *.a
 *.dylib
 *.metallib
+rust/target/
 
 # Model weights / large blobs
 *.safetensors
