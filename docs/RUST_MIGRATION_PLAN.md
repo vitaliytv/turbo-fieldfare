@@ -958,17 +958,18 @@ runtime. Інші проєкти можуть зібрати власний serv
 - `--host 127.0.0.1` лишається default і працює без credentials;
 - `--host <non-loopback>` вимагає explicit remote-security config; відсутня,
   неповна або невалідна конфігурація завершує запуск до bind;
-- remote mode має TLS/identity, authentication, bounded request/connection
-  admission, rate limits, audit events без prompt/secret content і documented
-  credential rotation;
+- remote mode має TLS server certificate/key і static Bearer API keys зі
+  hashed key file, bounded request/connection admission, rate limits, audit
+  events без prompt/secret content і documented credential rotation;
+- TLS і API keys не потрібні та не застосовуються до loopback mode;
 - `/health` має окрему, навмисно визначену policy; інші OpenAI routes не
   допускають anonymous access;
 - security tests покривають wildcard/LAN/IPv6 binds, missing/expired TLS,
   invalid credentials, queue exhaustion, log redaction та loopback regression.
 
-Конкретний identity mechanism обирається окремо перед реалізацією. Tool runner
-не є наслідком remote bind: він лишається disabled-by-default sandboxed
-capability з власною policy.
+Bearer API key є першим remote identity mechanism; mTLS може бути доданий
+пізніше як другий provider. Tool runner не є наслідком remote bind: він
+лишається disabled-by-default sandboxed capability з власною policy.
 
 ## Наскрізні приймальні критерії
 
@@ -985,7 +986,7 @@ capability з власною policy.
 | Пам'ять | Регресія physical footprint не більше 10% |
 | I/O | Обмежені reads, slots, descriptors і queues |
 | Cancellation | Перевірено lifecycle HTTP -> API -> worker -> Metal |
-| Безпека | Немає другого model process; non-loopback bind fail-closed без remote security |
+| Безпека | Немає другого model process; non-loopback bind fail-closed без TLS і Bearer key; loopback не вимагає TLS |
 | Streaming | Monotonic event sequence, lossless UTF-8 і рівно один terminal event |
 | Надійність | Worker readiness/crash/reconnect не дають stale socket, orphan або duplicate output |
 | Cache | Cache key містить template/dialect/config identity; кожен miss має reason code |
