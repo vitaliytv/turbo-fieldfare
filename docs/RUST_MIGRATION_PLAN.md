@@ -585,6 +585,12 @@ Supervisor володіє socket path, child process і cleanup. Готовні�
 launchd state або існування stale socket. Один bounded restart/reconnect policy
 повідомляє API typed `unavailable`; він ніколи не створює паралельний worker.
 
+Обрано supervisor topology: `turbofieldfare serve` запускає окремі API і worker
+processes, але лишається однією командою для оператора. API restart не
+перезапускає worker/model; supervisor restart завершує лише процеси, які він
+створив. `launchd` не є runtime dependency або source of truth для Rust
+terminal product.
+
 ### Критерій завершення
 
 - Rust API разом зі Swift worker проходить HTTP contract suite старого Swift
