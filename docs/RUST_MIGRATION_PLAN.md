@@ -65,9 +65,9 @@ Rust та inference-технологіям у нас залишатимутьс�
   дозволяє LAN/remote bind як окремий opt-in transport із явною політикою
   авторизації, TLS/identity та bounded admission; `--host 0.0.0.0` не є
   коротким шляхом для вимкнення цих перевірок.
-- Модель не виконує інструменти сама: tool execution, мережеві credentials та
-  policy залишаються за клієнтом. Будь-який майбутній server-side tool runner
-  — окремий sandboxed продукт, disabled by default.
+- Сервер і worker ніколи не виконують tools: вони лише повертають structured
+  tool calls. Tool execution, мережеві credentials, policy та повторний
+  tool-result turn назавжди залишаються за клієнтом.
 - До Rust worker ранні фази не стандартизують runtime controls або capability
   negotiation. API передає лише мінімальний validated generation request;
   canonical config snapshot з'явиться разом із `moe-runtime`, де його можна
@@ -154,7 +154,7 @@ architecture adapter.
 | Installer trust, QAT/custom repos та CDN auth | #52, #109, PR #85, PR #98, PR #115 | на етапах міграції лише curated pinned descriptors; redirect allowlist, secret redaction, receipt provenance та bounded range-transfer conformance tests |
 | Startup/worker availability | #25, PR #88, PR #126 | supervisor owns worker; readiness is socket handshake, never a guessed PID; bounded retry/backoff and typed unavailable state, without second model process |
 | Compatibility floor | #19, PR #32, PR #110, #121 | macOS 26+ only; upstream macOS 15 fallback не входить у Rust migration scope, unsupported host fail-fast до model load |
-| Remote access і external tools | #120, PR #22, PR #79, #122 | loopback default; general `--host` як окремий fail-closed security milestone, tool runner — окремий sandboxed продукт |
+| Remote access і external tools | #120, PR #22, PR #79, #122 | loopback default; general `--host` як окремий fail-closed security milestone; server-side tool runner поза scope |
 | Files/Batch, multi-turn, media | PR #57, #74, #51, #11, #18, #9 | durable job state and prompt history contracts belong above inference; media is a future capability with bounded `MediaRef`, never an untyped HTTP blob passed to runtime |
 
 UI-only PRs (#91, #99, #114, #68, #15) і app packaging issues (#48, #86,
@@ -968,8 +968,9 @@ runtime. Інші проєкти можуть зібрати власний serv
   invalid credentials, queue exhaustion, log redaction та loopback regression.
 
 Bearer API key є першим remote identity mechanism; mTLS може бути доданий
-пізніше як другий provider. Tool runner не є наслідком remote bind: він
-лишається disabled-by-default sandboxed capability з власною policy.
+пізніше як другий provider. Tool runner не є наслідком remote bind і не входить
+у scope цього продукту: API/worker ніколи не отримують tool credentials або
+права виконання.
 
 ## Наскрізні приймальні критерії
 
@@ -987,6 +988,7 @@ Bearer API key є першим remote identity mechanism; mTLS може бути
 | I/O | Обмежені reads, slots, descriptors і queues |
 | Cancellation | Перевірено lifecycle HTTP -> API -> worker -> Metal |
 | Безпека | Немає другого model process; non-loopback bind fail-closed без TLS і Bearer key; loopback не вимагає TLS |
+| Tools | Server/worker не виконують tools і не зберігають tool credentials; клієнт володіє execution loop |
 | Streaming | Monotonic event sequence, lossless UTF-8 і рівно один terminal event |
 | Надійність | Worker readiness/crash/reconnect не дають stale socket, orphan або duplicate output |
 | Cache | Cache key містить template/dialect/config identity; кожен miss має reason code |
