@@ -150,7 +150,7 @@ architecture adapter.
 | Tool schemas, repeated system messages, JSON output | #103, PR #26, PR #107 | рання нормалізація OpenAI input у API та family parser; `GenerationConstraint` capability відкладається до Rust worker |
 | Реальні runtime controls і профілювання | PR #123, PR #119, PR #53 | відкласти `RuntimeConfig` і full capabilities до Rust worker; ранні фази фіксують лише telemetry envelope та мінімальний request contract |
 | Друга/третя MoE family, 4/6/8-bit, long context | #44, #54, #102, PR #29, PR #105 | role-based quant capabilities, architecture registry, separate KV/linear state, per-family benchmark matrix і explicit resource estimate до load |
-| Installer trust, QAT/custom repos та CDN auth | #52, #109, PR #85, PR #98, PR #115 | source descriptor with trust level/pinned digest, redirect allowlist, secret redaction, receipt provenance та bounded range-transfer conformance tests |
+| Installer trust, QAT/custom repos та CDN auth | #52, #109, PR #85, PR #98, PR #115 | на етапах міграції лише curated pinned descriptors; redirect allowlist, secret redaction, receipt provenance та bounded range-transfer conformance tests |
 | Startup/worker availability | #25, PR #88, PR #126 | supervisor owns worker; readiness is socket handshake, never a guessed PID; bounded retry/backoff and typed unavailable state, without second model process |
 | Compatibility floor | #19, PR #32, PR #110, #121 | capability-based Metal policy and explicit support matrix; macOS 26 is production baseline, macOS 15 fallback is separately tested compatibility tier |
 | Remote access і external tools | #120, PR #22, PR #79, #122 | loopback default remains invariant; remote binding/tool runner are separate security milestones, not options silently added to API server |
@@ -418,9 +418,9 @@ tokens та model bytes заборонені. `--profile-json` або еквів
 - Machine-readable telemetry schema і redaction fixtures; ранній envelope
   покриває request/lifecycle/cache, а I/O/GPU/memory fields реєструються як
   unavailable до Rust worker.
-- Installer security fixtures: pinned source descriptor, redirect allowlist,
-  auth-header forwarding only to approved hosts, resume/receipt provenance і
-  відсутність secret у logs/errors.
+- Installer security fixtures: curated pinned source descriptor, redirect
+  allowlist, auth-header forwarding only to approved hosts, resume/receipt
+  provenance і відсутність secret у logs/errors.
 
 Фіксувати commit, hardware, RAM, версії macOS/Swift/Rust/Xcode, точні команди,
 exit codes, timing footers, energy mode і всі відхилення від протоколу.
@@ -874,10 +874,10 @@ bounded range transport, `repack-core` — за checkpoint/writer policy,
 `gemma4-repack` і `qwen36-repack` — за source tensor mapping та quantization
 plan, а `gturbo-format` — за target layout. Зберегти:
 
-- `ModelSourceDescriptor`: family, source format, repo/revision, expected
-  index/digest, allowed redirect hosts, credential policy і trust level
-- curated pinned source як default; custom repo/revision лише explicit
-  untrusted descriptor, який не може маскуватися під curated receipt
+- curated `ModelSourceDescriptor`: family, source format, pinned repo/revision,
+  expected index/digest, allowed redirect hosts і credential policy
+- installer не має `--repo-id`, `--revision` або custom-source mode у фазах
+  міграції; QAT і довільні checkpoints — окремий post-parity product decision
 - bounded HTTP range downloads
 - відсутність повного checkpoint або shard на disk
 - tile-sized scratch
@@ -894,6 +894,11 @@ shards. Authorization може пережити redirect лише до explicit 
 hosts; на будь-якому іншому host він знімається. URLs, tokens та headers не
 потрапляють у telemetry, errors або receipt.
 
+Custom source/QAT підтримка не є просто ще одним CLI flag: вона потребує
+окремого trust policy, user-visible storage/throughput estimate і незалежних
+repack/load/generation fixtures. Повернутися до неї можна після Rust installer
+parity, але вона не блокує Gemma/Qwen curated migration.
+
 ### Критерій завершення
 
 - Rust output відповідає GTurbo V1 codecs і accepted Swift output окремо для
@@ -902,8 +907,8 @@ hosts; на будь-якому іншому host він знімається. U
 - Пошкоджені ranges завантажуються повторно.
 - Peak scratch залишається обмеженим.
 - Повний source checkpoint не створюється.
-- Pinned і custom-source receipts мають різний provenance; redirect, 403 та
-  resume cases проходять без витоку bearer token.
+- Receipt прив'язаний до curated descriptor; redirect, 403 та resume cases
+  проходять без витоку bearer token.
 
 ## Етап 13: перехід до terminal-only продукту
 
