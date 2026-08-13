@@ -340,6 +340,7 @@ public API не повинен вимагати unpublished path dependency.
 | Hub/range transport | `hf-hub`, `reqwest` | `model-source` |
 | Model sources | `safetensors` | `model-source`, де це спрощує parsing |
 | Integrity | `sha2` | `gturbo-format`, `gturbo-store`, `repack-core` |
+| Constrained decoding | `llguidance` як optional feature; `xgrammar` лише benchmark control | `constraint-adapter` над sampler/logit mask |
 | Tests і microbenchmarks | `proptest`, `criterion` | `test-support`, crate-local benches |
 
 `openai-protocol` скорочує роботу з wire types, але не замінює специфічну для
@@ -350,6 +351,24 @@ schemas, історичних tool calls і фактичних context limits.
 Старий crate `metal` застарів. Нова Rust-реалізація Metal використовує
 `objc2-metal`, а робота з Objective-C lifetime та `unsafe` ізолюється в
 `metal-runtime`.
+
+### Рішення щодо constrained decoding
+
+До Rust decode parity діє family parser з контрольованим typed failure або
+documented text fallback. Після появи Rust sampler додається
+`constraint-adapter` з optional feature `llguidance`: він компілює обмеження і
+подає allow-mask у sampler, але не залежить від HTTP, Metal чи конкретної family.
+
+`xgrammar` не є production dependency. Його можна інтегрувати лише у
+benchmark/conformance harness як контроль для JSON/tool-call grammars на Gemma
+і Qwen tokenizers. Рішення про заміну `llguidance` можливе тільки за виміряними
+даними: compile latency, decode overhead, allocation/RSS, valid-completion rate
+та коректність при cancellation, thinking і long generation.
+
+Перший production constraint profile не приймає довільний JSON Schema. Він
+обмежує наш JSON/tool-call envelope: допустимі tool names, JSON arguments і
+закриття family tags. Довільний JSON Schema — окремий пізніший capability після
+conformance matrix і явних resource limits для schema/grammar.
 
 ## Етап 0: зафіксувати еталон
 
@@ -503,6 +522,10 @@ reconnect і cancellation. `worker` реалізує серверний transpor
 перевіряє, що capability дозволена; worker/family adapter перевіряє та виконує
 конкретну grammar. Так tool choices, repeated system messages і family template
 не протікають у IPC як HTTP details.
+
+У v1 `json` і `tool-call` означають тільки затверджені bounded profiles. API
+відхиляє довільну schema як `unsupported-capability`, доки `constraint-adapter`
+не пройде окремі performance та correctness gates.
 
 ### Межа відповідальності
 
