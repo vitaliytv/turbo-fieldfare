@@ -95,17 +95,17 @@ GPU family потрібно повторно перевірити ці джер�
 sets. Новіший API є кандидатом, а не автоматичною заміною виміряного
 production-шляху.
 
-### Матриця сумісності
+### Платформена межа
 
-| Tier | Мінімум | Гарантія |
-| --- | --- | --- |
-| Production | macOS 26, актуальний Xcode Metal toolchain, Apple Silicon | Metal 4/TensorOps candidate paths, повний benchmark і release gates |
-| Compatibility | macOS 15, сумісний Xcode/Metal 3.2 | CPU/format/API та fallback kernels; окремі CI/tests, без обіцянки TensorOps performance |
-| Unsupported | не-Apple-Silicon, macOS 14 і нижче | Явна діагностика до model load, без часткового запуску |
+Фінальний Rust/MoE продукт підтримує лише Apple Silicon на macOS 26+ з
+актуальним Xcode Metal toolchain. Це єдина production і CI target matrix для
+API, format, Metal 4/TensorOps, benchmarks та release gates.
 
-Capability discovery, а не назва chip чи compile SDK, обирає pipeline. Це
-зберігає можливість прийняти upstream macOS 15 fallback без послаблення
-production gates для сучасних Apple GPU.
+macOS 15 fallback kernels, Metal 3.2 compatibility і macOS 14 не входять у
+міграційний scope. На непідтримуваній платформі CLI має завершитися з явною
+діагностикою до model load, без часткового запуску. Усередині підтримуваної
+платформи pipeline як і раніше обирається за capability discovery, а не за
+назвою chip.
 
 ## Що беремо з upstream PR №105
 
@@ -152,7 +152,7 @@ architecture adapter.
 | Друга/третя MoE family, 4/6/8-bit, long context | #44, #54, #102, PR #29, PR #105 | role-based quant capabilities, architecture registry, separate KV/linear state, per-family benchmark matrix і explicit resource estimate до load |
 | Installer trust, QAT/custom repos та CDN auth | #52, #109, PR #85, PR #98, PR #115 | на етапах міграції лише curated pinned descriptors; redirect allowlist, secret redaction, receipt provenance та bounded range-transfer conformance tests |
 | Startup/worker availability | #25, PR #88, PR #126 | supervisor owns worker; readiness is socket handshake, never a guessed PID; bounded retry/backoff and typed unavailable state, without second model process |
-| Compatibility floor | #19, PR #32, PR #110, #121 | capability-based Metal policy and explicit support matrix; macOS 26 is production baseline, macOS 15 fallback is separately tested compatibility tier |
+| Compatibility floor | #19, PR #32, PR #110, #121 | macOS 26+ only; upstream macOS 15 fallback не входить у Rust migration scope, unsupported host fail-fast до model load |
 | Remote access і external tools | #120, PR #22, PR #79, #122 | loopback default remains invariant; remote binding/tool runner are separate security milestones, not options silently added to API server |
 | Files/Batch, multi-turn, media | PR #57, #74, #51, #11, #18, #9 | durable job state and prompt history contracts belong above inference; media is a future capability with bounded `MediaRef`, never an untyped HTTP blob passed to runtime |
 
