@@ -17,7 +17,7 @@ turbofieldfare-api (Rust)
 turbofieldfare-worker (Rust)
     |
     v
-Metal 4 / TensorOps / .gturbo
+Metal 4 / TensorOps / SSD-streaming MoE / .gturbo
 ```
 
 Міграція навмисно гібридна. Спочатку відокремлюємо OpenAI-сумісний сервер і
@@ -29,12 +29,19 @@ Rust та inference-технологіям у нас залишатимутьс�
 План має два окремі напрями:
 
 1. **Міграція поведінки:** відтворити поточну поведінку на Rust, повторно
-   використовуючи формат `.gturbo` і наявні Metal kernels.
+   використовуючи формат `.gturbo` і наявні Metal kernels для Gemma 4 та Qwen
+   3.6, але не вбудовувати жодну model family у загальні шари.
 2. **Модернізація Metal:** після досягнення паритету оцінити нові Apple API та
    приймати лише зміни, які проходять перевірки коректності, якості, пам'яті й
    повного часу виконання.
 
 Не поєднувати перенесення на іншу мову й оптимізацію в одному етапі.
+
+Ціль проєкту — не універсальний runtime для будь-якого Transformer. Це
+перевикористовуваний runtime для MoE-моделей, у яких resident tensors і
+вибірково прочитані з SSD routed experts виконуються через Metal. Gemma 4
+26B-A4B і Qwen 3.6 35B-A3B є першими двома architecture adapters, які доводять
+межі спільного ядра.
 
 ## Основні обмеження
 
@@ -77,6 +84,36 @@ GPU family потрібно повторно перевірити ці джер�
 sets. Новіший API є кандидатом, а не автоматичною заміною виміряного
 production-шляху.
 
+## Що беремо з upstream PR №105
+
+[Upstream PR №105](https://github.com/drumih/turbo-fieldfare/pull/105) є
+рухомою гілкою, тому для аналізу плану зафіксовано snapshot `ffef17f`. На цьому
+snapshot PR має 457 змінених файлів і окремий Swift target `NVMAIFormat` з
+контрактами `GTurboFormatV1`, manifest, resident index і packed-expert layout.
+Він також містить Qwen 3.6, 4/6/8-bit repack, hybrid full-attention та
+Gated-DeltaNet layers і необов'язковий MTP sidecar.
+
+Цей PR підтверджує такі рішення:
+
+- `.gturbo` залишається runtime-форматом для resident weights і bounded
+  `pread` routed experts; GGUF або Safetensors не замінюють його в runtime.
+- Safetensors є одним із source checkpoint adapters для repack, а не
+  залежністю model loader.
+- GTurbo V1 structural codecs треба виділити в незалежний crate без Metal,
+  tokenizer, HTTP або конкретної model family.
+- Quantization описується по ролях tensorів, а не одним глобальним `int4`.
+- Architecture family, tensor-name contract, layer graph, chat dialect і
+  family-specific kernels мають обиратися одним adapter/registry механізмом.
+- Qwen MTP — sidecar capability конкретної family, а не обов'язок загального
+  inference API.
+
+Не копіювати структуру PR механічно. Поточний head PR є Qwen-only і містить
+Qwen defaults у runtime types. У Rust-проєкті не можна будувати «generic» core
+як одну велику `ArchConfig` із дедалі більшою кількістю family flags або
+визначати family лише за shape. Спільне ядро володіє структурними гарантіями;
+семантику manifest, tensor catalog і layer graph повністю перевіряє вибраний
+architecture adapter.
+
 ## Цільовий Cargo workspace
 
 Workspace зростає поступово; не всі crates мають з'явитися першого дня. Уся
@@ -92,30 +129,39 @@ rust/
     ipc-client/           UDS client, reconnect і реалізація backend trait
     openai-api/           Axum routes, OpenAI adapter, SSE, Files і Batch
 
+    moe-core/             architecture/executor traits, topology і tensor roles
     gturbo-format/        manifest, layout, indexes і receipt без I/O політики
     gturbo-store/         mmap/pread, integrity та bounded tensor/expert reads
     model-source/         Hub metadata, range transport і source tensors
 
-    gemma4-tokenizer/     tokenizer, chat template і tool parsing Gemma 4
+    llm-prompt/           tokenizer loading, template і prompt-dialect traits
     llm-sampling/         sampling, stop conditions і deterministic RNG
     llm-kv-cache/         загальні типи та політики KV cache
     metal-tensor-types/   shapes, dtypes, layouts і checked byte ranges
     metal-runtime/        безпечний API проєкту поверх objc2-metal
-    gemma4-kernels/       Rust host wrappers для MSL kernels Gemma 4
+    moe-metal-kernels/    спільні quant/GEMV/router/routed-MoE primitives
     moe-expert-cache/     slots, LFU planning і bounded expert streaming
-    gemma4-inference/     layers, forward, prefill і decode Gemma 4
 
-    runtime/              model lifecycle і реалізація inference-core traits
+    gemma4-arch/          Gemma schema, tensor catalog, prompt і layer graph
+    gemma4-metal/         лише Gemma-specific Metal pipelines
+    qwen36-arch/          Qwen schema, ChatML, hybrid graph і optional MTP
+    qwen36-metal/         Qwen Gated-DeltaNet, gates та інші family pipelines
+
+    moe-runtime/          model lifecycle, registry і inference-core backend
     worker/               IPC service, queue, cancellation і usage accounting
-    repack/               bounded installer/repacker як library API
+    repack-core/          bounded installer/checkpoint/writer orchestration
+    gemma4-repack/        Safetensors -> GTurbo mapping для Gemma 4
+    qwen36-repack/        Safetensors -> GTurbo mapping для Qwen 3.6
     test-support/         mock backend, golden fixtures і reusable harnesses
 
   bins/
     turbofieldfare/        terminal CLI, installer commands і supervisor
     turbofieldfare-api/    тонкий HTTP process: openai-api + ipc-client
-    turbofieldfare-worker/ тонкий worker process
+    turbofieldfare-worker/ worker + runtime + зареєстровані architectures
   shaders/
-    gemma4/                MSL sources та metallib build inputs
+    common/                спільні MoE/quant/attention MSL primitives
+    gemma4/                Gemma-specific MSL sources
+    qwen36/                Qwen-specific MSL sources
   xtask/                   build metallib, fixtures, publish і conformance tasks
 ```
 
@@ -126,41 +172,83 @@ rust/
 Бажаний ациклічний напрям залежностей:
 
 ```text
-turbofieldfare bin -> ipc-client, repack; запускає API/worker processes
+turbofieldfare bin -> ipc-client, repack-core; запускає API/worker processes
 api bin            -> openai-api, ipc-client
-worker bin         -> worker, runtime
+worker bin         -> worker, moe-runtime, gemma4-metal, qwen36-metal
 
 openai-api -> inference-core
 ipc-client -> protocol, inference-core
 worker     -> protocol, inference-core
-runtime    -> inference-core, gemma4-inference
 protocol   -> inference-core
 
-gemma4-inference -> gemma4-tokenizer, gemma4-kernels, llm-sampling,
-                    llm-kv-cache, gturbo-store, moe-expert-cache
-gemma4-kernels   -> metal-tensor-types, metal-runtime
-moe-expert-cache -> gturbo-store
-gturbo-store     -> gturbo-format
-repack           -> gturbo-format, model-source
+moe-runtime -> inference-core, moe-core, gturbo-store, llm-prompt,
+               llm-sampling, llm-kv-cache, moe-expert-cache
+gemma4-arch -> moe-core, gturbo-format, llm-prompt
+qwen36-arch -> moe-core, gturbo-format, llm-prompt
+moe-metal-kernels -> metal-tensor-types, metal-runtime
+gemma4-metal -> gemma4-arch, moe-metal-kernels, metal-runtime
+qwen36-metal -> qwen36-arch, moe-metal-kernels, metal-runtime
+moe-expert-cache -> gturbo-store -> gturbo-format
+gemma4-repack, qwen36-repack -> repack-core, model-source, gturbo-format
 ```
 
 ### Правила меж crates
 
-- `inference-core` не знає про HTTP, IPC, Gemma, Metal або конкретний storage.
+- `inference-core` не знає про HTTP, IPC, model family, Metal або storage.
+- `moe-core` описує лише стабільні MoE concepts та traits. Нова family не може
+  додати до нього прапорець, доки спільний concept не доведено двома adapters.
 - `protocol` містить лише versioned wire contract і conversion; він не містить
   Axum/OpenAI/Swift/Metal types і не є власником бізнес-логіки.
-- `openai-api` залежить від trait, а не від Gemma або Metal implementation.
+- `openai-api` залежить від trait, а не від family або Metal implementation.
 - `ipc-client` є окремою реалізацією backend trait; HTTP crate не знає, чи
   backend локальний, IPC або тестовий.
 - `gturbo-format` не виконує network чи Metal I/O; `gturbo-store` не знає про
   HTTP або OpenAI.
-- `metal-runtime` не знає про Gemma; model-specific pipelines залишаються в
-  `gemma4-kernels`.
-- `gemma4-inference` не відкриває sockets і не формує OpenAI responses.
+- `metal-runtime` не знає про model families; спільні kernels не містять Gemma
+  або Qwen tensor names.
+- `gemma4-arch` і `qwen36-arch` повністю володіють tensor catalog, semantic
+  manifest validation, prompt dialect і layer graph своїх families, але не
+  залежать від Metal.
+- `gemma4-metal` і `qwen36-metal` реалізують executor factories для відповідних
+  CPU-only descriptors; залежність ніколи не спрямована з `*-arch` до Metal.
+- `moe-runtime` приймає architecture factories через builder/registry і не
+  залежить від конкретного adapter.
+- Architecture adapters не відкривають sockets і не формують OpenAI responses.
 - `MockBackend` і test fixtures належать `test-support`, а не production crates.
 - Feature flags вмикають лише необов'язкові інтеграції; вони не створюють дві
   різні семантики одного API.
 - Заборонені циклічні залежності та імпорт із executable crate у library crate.
+
+### Межа GTurbo та architecture adapters
+
+`gturbo-format` реалізує точний on-disk GTurbo V1 structural contract:
+
+- magic і format major/minor;
+- безпечні relative paths, file sizes, hashes та install receipt binding;
+- resident index із checked ranges, dtype, shape і alignment;
+- packed-expert layout із layer files, logical/physical expert mapping,
+  per-expert tensor ranges і stride;
+- common manifest envelope, quantization slots і повний architecture payload.
+
+Format crate перевіряє overflow, overlap, truncation, path safety та
+manifest/layout consistency, але не вирішує, чи Qwen layer graph або Gemma
+tensor catalog семантично правильні. Повний architecture payload не можна
+мовчки втрачати через Serde unknown fields: він передається вибраному adapter.
+
+Версії незалежні:
+
+```text
+GTurbo format version       змінюється через несумісний on-disk layout
+architecture_id             gemma4, qwen36, qwen36_mtp, ...
+architecture_schema_version змінюється через семантику family payload
+quantization capabilities   перевіряються adapter-ом по tensor roles
+```
+
+Існуючі Gemma GTurbo V1 та артефакти з PR №105 читаються compatibility
+decoders. Якщо старий manifest не має явного `architecture_id`, family можна
+визначити лише в legacy adapter з суворою перевіркою всього descriptor; нові
+артефакти завжди записують явні ID та schema version. Створення GTurbo V2 не є
+частиною міграції, доки V1 може безпечно виразити обидві families.
 
 ### Публікація і повторне використання
 
@@ -169,10 +257,10 @@ Crates поділяються не за принципом «усе опублі
 
 | Група | Crates | Політика |
 | --- | --- | --- |
-| Публічні першими | `inference-core`, `openai-api`, `protocol`, `gturbo-format` | SemVer, rustdoc, examples, changelog і conformance tests |
-| Публічні після паритету | `ipc-client`, `llm-sampling`, `llm-kv-cache`, `metal-tensor-types`, `metal-runtime`, `gturbo-store`, `moe-expert-cache`, `model-source` | Публікувати після стабілізації transport, unsafe та I/O контрактів |
-| Model-specific | `gemma4-tokenizer`, `gemma4-kernels`, `gemma4-inference` | Reusable для інших Gemma 4 застосунків, але без обіцянки універсальності |
-| Внутрішня композиція | `runtime`, `worker`, `repack`, binaries, `test-support`, `xtask` | Спочатку `publish = false`; публікувати лише за наявності окремого use case |
+| Публічні першими | `inference-core`, `openai-api`, `protocol`, `gturbo-format`, `moe-core` | SemVer, rustdoc, examples, changelog і conformance tests |
+| Публічні після паритету | `ipc-client`, `llm-prompt`, `llm-sampling`, `llm-kv-cache`, `metal-tensor-types`, `metal-runtime`, `moe-metal-kernels`, `gturbo-store`, `moe-expert-cache`, `model-source` | Публікувати після стабілізації transport, unsafe та I/O контрактів |
+| Model-specific | `gemma4-arch`, `gemma4-metal`, `gemma4-repack`, `qwen36-arch`, `qwen36-metal`, `qwen36-repack` | Reusable family adapters без обіцянки універсальності |
+| Внутрішня композиція | `moe-runtime`, `worker`, `repack-core`, binaries, `test-support`, `xtask` | Спочатку `publish = false`; публікувати лише за наявності окремого use case |
 
 Публічний crate повинен мати мінімальний standalone example, README, ліцензію,
 MSRV policy, задокументовані safety invariants і `cargo package` check. Його
@@ -196,16 +284,16 @@ public API не повинен вимагати unpublished path dependency.
 | Metal bindings | `objc2`, `objc2-foundation`, `objc2-metal` | `metal-runtime` |
 | FP16/BF16 і POD data | `half`, `bytemuck` | `metal-tensor-types`, kernels |
 | Memory maps і POSIX I/O | `memmap2`, `rustix` | `gturbo-store` |
-| Tokenization і templates | `tokenizers`, `minijinja` | `gemma4-tokenizer` |
+| Tokenization і templates | `tokenizers`, `minijinja` | `llm-prompt` + family adapters |
 | Hub/range transport | `hf-hub`, `reqwest` | `model-source` |
 | Model sources | `safetensors` | `model-source`, де це спрощує parsing |
-| Integrity | `sha2` | `gturbo-format`, `gturbo-store`, `repack` |
+| Integrity | `sha2` | `gturbo-format`, `gturbo-store`, `repack-core` |
 | Tests і microbenchmarks | `proptest`, `criterion` | `test-support`, crate-local benches |
 
 `openai-protocol` скорочує роботу з wire types, але не замінює специфічну для
 TurboFieldfare валідацію. Локальними залишаються правила для model IDs, `n=1`,
-sampling ranges, unsupported fields, tool choices, адаптації Gemma schema,
-історичних tool calls і фактичних context limits.
+sampling ranges, unsupported fields, tool choices, family-specific tool
+schemas, історичних tool calls і фактичних context limits.
 
 Старий crate `metal` застарів. Нова Rust-реалізація Metal використовує
 `objc2-metal`, а робота з Objective-C lifetime та `unsafe` ізолюється в
@@ -223,11 +311,14 @@ sampling ranges, unsupported fields, tool choices, адаптації Gemma sche
 ### Результати
 
 - Визначені Swift reference commit і hash model manifest.
+- Зафіксовані окремі reference snapshots для Gemma 4 та Qwen 3.6; для PR №105
+  записано commit, оскільки PR залишається open і може змінитися.
 - Black-box HTTP fixtures для routes, errors, SSE, tools, Files і Batch.
-- Fixtures для tokenizer і rendered prompts.
-- Fixtures input/output для kernels і незалежні FP32 references.
-- Generation fixtures із фіксованим seed.
-- Зафіксований performance baseline за чинним community benchmark protocol.
+- Fixtures для Gemma та Qwen tokenizer, rendered prompts і tool dialects.
+- Спільні й family-specific kernel fixtures та незалежні FP32 references.
+- Generation fixtures із фіксованим seed для кожної family/quantization.
+- Performance baseline за community protocol окремо для кожної перевіреної
+  family, quantization, context shape та cache mode.
 
 Фіксувати commit, hardware, RAM, версії macOS/Swift/Rust/Xcode, точні команди,
 exit codes, timing footers, energy mode і всі відхилення від протоколу.
@@ -334,10 +425,9 @@ Rust API відповідає за:
 - SSE і response envelopes
 - request IDs, body limits, Files і Batch
 
-Inference worker відповідає за:
+Inference worker і вибраний architecture adapter відповідають за:
 
-- tokenizer і Gemma chat template
-- Gemma-specific tool-schema validation
+- tokenizer, family chat template і tool-schema validation
 - фактичну валідацію token context
 - generation queue і prompt/KV cache
 - sampling, inference, Metal та usage accounting
@@ -358,7 +448,7 @@ Inference worker відповідає за:
 Послідовність запуску:
 
 1. Bind або connect до налаштованого Unix socket.
-2. Завантажити й перевірити одну `.gturbo` model.
+2. Завантажити й перевірити одну `.gturbo` model через architecture registry.
 3. Опублікувати `ready` лише після готовності model і tokenizer.
 4. Серіалізувати весь реальний inference через worker coordinator.
 5. Стрімити events і виконувати cancellation.
@@ -372,6 +462,8 @@ Inference worker відповідає за:
 - Interactive і Batch робота використовують одну авторитетну worker queue.
 - Падіння worker перетворюється на контрольований HTTP `503`.
 - Перезапуск API може відновити з'єднання без завантаження другої моделі.
+- `ready` повідомляє architecture ID/schema, quantization capabilities і
+  optional features без model-specific полів у IPC envelope.
 - Регресія TTFT не перевищує 5%.
 - Decode throughput становить щонайменше 98% від in-process Swift baseline.
 - IPC memory залишається обмеженою для довгих responses і slow clients.
@@ -401,34 +493,40 @@ Batch надсилає звичайні generation requests через IPC і н
 - Семантика server restart явно визначена й протестована.
 - SwiftNIO більше не потрібен у production launch path.
 
-## Етап 5: Rust-шар `.gturbo` і tokenizer
+## Етап 5: GTurbo V1, MoE descriptors і family adapters без Metal
 
-Роботу розділити між `gturbo-format`, `gturbo-store` і `gemma4-tokenizer`.
-Format crate описує bytes і layout, store реалізує bounded reads та integrity,
-а tokenizer містить лише model-specific text contract.
+Роботу розділити між `gturbo-format`, `gturbo-store`, `moe-core`, `llm-prompt`,
+`gemma4-arch` і `qwen36-arch`. Format crate описує on-disk bytes і layout,
+store реалізує bounded reads та integrity, MoE core — traits і topology, а
+кожен family adapter — semantic schema, tensor catalog, prompt dialect та layer
+graph.
 
 Перенести без Metal execution:
 
 - parsing manifest і verified-install receipt
-- валідацію architecture та quantization
+- common structural validation format та role-based quantization descriptors
 - resident index і packed-expert layout
 - file sizes, hashes, offsets, strides і alignment
-- load, encode, decode та streaming decode tokenizer
-- pinned Jinja chat template
-- parsing structured assistant/tool-call
+- Gemma 4 і Qwen 3.6 architecture adapters та явний registry
+- load, encode, decode та streaming decode tokenizer для обох families
+- Gemma IT і Qwen ChatML templates та structured tool-call parsers
+- Qwen hybrid full-attention/Gated-DeltaNet descriptor і optional MTP metadata
 
 Не змінювати `.gturbo`. Одночасна зміна model format забере можливість
 незалежно порівнювати host-реалізації.
 
 ### Критерій завершення
 
-- Інтерпретація manifest і layout точно збігається зі Swift.
-- Token IDs і rendered prompts збігаються з golden fixtures.
-- Tool-call structures збігаються.
+- Rust codecs читають accepted Gemma artifacts і fixtures із PR №105 та
+  побайтово стабільно round-trip власні GTurbo metadata.
+- Token IDs, rendered prompts і tool-call structures збігаються з golden
+  fixtures окремо для Gemma та Qwen.
+- Додавання synthetic третьої architecture реалізується test-only adapter без
+  змін у `moe-core`, `gturbo-store` або `moe-runtime`.
 - Corrupt, truncated, misaligned або incompatible models безпечно відхиляються.
 - Жоден test або loader не розміщує tensor масштабу моделі в Rust heap.
 - `gturbo-format` має standalone inspect example без Metal і inference.
-- `gemma4-tokenizer` тестується без model weights і GPU.
+- Family prompt/manifest adapters тестуються без model weights і GPU.
 
 ## Етап 6: фундамент Metal на Rust
 
@@ -464,25 +562,26 @@ source compilation може залишитися явним development fallback
 - Помилки pipeline compilation і cache спостережувані.
 - Release startup не потребує runtime MSL compilation.
 - CPU-only tests для shapes/layouts не лінкують Metal framework.
-- `metal-runtime` не імпортує Gemma-specific constants або pipelines.
+- `metal-runtime` не імпортує family-specific constants або pipelines.
 
-## Етап 7: перенести host wrappers для kernels
+## Етап 7: спільні MoE kernels та family-specific pipelines
 
-У `gemma4-kernels` повторно використати наявний MSL і замінити лише Swift host
-orchestration.
+У `moe-metal-kernels` винести лише справді спільні primitives. У
+`gemma4-metal` і `qwen36-metal` повторно використати наявний MSL і замінити
+лише Swift host orchestration. Не узагальнювати kernels тільки через однакове
+ім'я операції, якщо layout, gating або numerical contract відрізняються.
 Рекомендований порядок:
 
 1. embedding lookup
 2. RMSNorm
 3. RoPE
-4. INT8 affine GEMV
-5. INT4 affine GEMV
-6. logit softcap і sampling
-7. attention
-8. fused QKV paths
-9. shared expert
-10. routed MoE
-11. fused layer tail і language-model head
+4. affine GEMV для реально підтриманих 4/6/8-bit layouts
+5. sampling, stop і family-specific logit transforms
+6. full/sliding attention
+7. shared expert і routed MoE
+8. family-specific fused QKV/layer-tail/head paths
+9. Qwen attention output gate і Gated-DeltaNet
+10. optional Qwen MTP verification path після базового Qwen parity
 
 Де можливо, порівнювати три незалежні шляхи:
 
@@ -497,6 +596,11 @@ Rust host + production MSL
 числового еталона та перевірок якості моделі, а не тотожності одному порядку
 reduction.
 
+Критерій архітектурної зрілості цього етапу: Gemma і Qwen використовують одну
+Metal runtime/command abstraction та спільні primitives там, де числовий
+контракт справді однаковий, але жоден family adapter не перевіряє назви tensors
+іншої family.
+
 ## Етап 8: пам'ять моделі та expert streaming
 
 Розмістити загальний bounded storage у `gturbo-store`, а slot planning і
@@ -509,7 +613,7 @@ MoE-специфічний lifecycle — у `moe-expert-cache`.
 - aligned expert-slot allocation
 - positional `pread`
 - lazy layer opening і verification
-- LFU cache на 16 slots із recency tie-break
+- bounded LFU cache із налаштовуваною кількістю slots і recency tie-break
 - parallel bounded reads
 - ownership slot до завершення всіх GPU consumers
 - планування cached hits і missing experts
@@ -525,21 +629,23 @@ MoE-специфічний lifecycle — у `moe-expert-cache`.
 - Cancellation не залишає slot у невизначеному стані.
 - Cold і warm I/O вимірюються окремо.
 - Physical footprint і вплив file cache звітуються окремо.
+- Ті самі cache/storage crates проходять fixtures для Gemma 128 experts і
+  Qwen 256 experts без hard-coded counts або layer filenames.
 
 ## Етап 9: Rust decode worker
 
-Decode model збирається в `gemma4-inference`; `runtime` адаптує її до
-`inference-core`, а `worker` додає IPC, авторитетну чергу і lifecycle. Жоден із
-цих шарів не дублює OpenAI validation.
+`moe-runtime` вибирає `gemma4-arch` або `qwen36-arch` за перевіреним manifest і
+адаптує executor до `inference-core`; `worker` додає IPC, авторитетну чергу і
+lifecycle. Жоден із цих шарів не дублює OpenAI validation.
 
 Перенести:
 
 - model ownership і runtime configuration
-- FP16 sliding-window та full-attention KV caches
-- forward loop із 30 layers
-- планування `cb1 -> CPU top-8 -> expert I/O -> cb2`
+- KV/state stores для sliding-window, full-attention і Qwen linear attention
+- family-owned layer graph замість hard-coded циклу з 30 layers
+- загальне планування `router -> top-k -> expert I/O -> expert execution`
 - overlap shared-expert/read
-- tied head, sampling, stops і detokenization
+- tied або untied head, sampling, stops і family detokenization
 - prompt continuation і cancellation
 
 Перший коректний end-to-end milestone може виконувати prefill token-by-token
@@ -561,18 +667,23 @@ turbofieldfare serve --worker rust
 - KV ring wraparound і continuation проходять.
 - Усі error, cancellation і shutdown paths обмежені.
 - Для зміни мови worker не потрібно змінювати Rust API.
+- Gemma і Qwen запускаються тим самим worker binary через registry selection;
+  unsupported architecture відхиляється до allocation model-scale buffers.
 
 ## Етап 10: Rust prefill і Apple tensor paths
 
-Спочатку перенести production behavior без нових політик:
+Спочатку перенести production behavior без нових політик. Chunk sizes,
+projection paths і layer mix беруться з architecture adapter та capability
+policy, а не зі спільних hard-coded Gemma defaults:
 
-- chunks по 128 tokens
+- прийняті production chunks окремо для Gemma і Qwen
 - вибір GEMV/QMM залежно від projection і shape
 - обмежений reusable scratch
-- staged affine INT4 Metal Performance Primitives path
+- staged affine 4/6/8-bit paths для заявлених adapter capabilities
 - batched routed MoE
 - language-model head лише для фінального row
 - Apple10 TensorOps full-attention path
+- Qwen Gated-DeltaNet prefill/state path
 - causal-tiled fallback для попередніх GPU families
 
 Вибір має залежати від capabilities, а не від назви chip. TensorOps є бажаним
@@ -583,8 +694,9 @@ accelerators M5 для dense compute на кшталт LLM prefill. Single-token
 
 ### Критерій завершення
 
-- Проходять prefill gates для 121, 527, 1 017 і 3 707 tokens.
+- Проходять прийняті short/medium/long prefill gates для обох families.
 - Full-attention gates покривають 8K, 16K, 32K і 64K.
+- Qwen hybrid-layer і linear-state gates проходять окремо для 4/6/8-bit.
 - Проходять і Apple10 TensorOps, і fallback для попередніх families.
 - Проходять direct numerical checks, delta-NLL, top-1/top-k, output quality та
   bounded RSS.
@@ -617,8 +729,9 @@ Validation, Metal Debugger, Metal System Trace і release-mode вимірюва�
 ## Етап 12: Rust installer і repacker
 
 Переносити repacker останнім. `model-source` відповідає за source metadata і
-bounded range transport, `repack` — за conversion/checkpoint policy, а
-`gturbo-format` — за target layout. Зберегти:
+bounded range transport, `repack-core` — за checkpoint/writer policy,
+`gemma4-repack` і `qwen36-repack` — за source tensor mapping та quantization
+plan, а `gturbo-format` — за target layout. Зберегти:
 
 - pinned model revision і accepted source index
 - bounded HTTP range downloads
@@ -630,13 +743,15 @@ bounded range transport, `repack` — за conversion/checkpoint policy, а
 - explicit partial discard
 - hashes, receipt binding, advisory locking і atomic promotion
 
+Safetensors читається тільки через `model-source`/family repack adapter.
 `hf-hub` може надати Hub metadata та authentication, але реалізація має
 зберегти bounded range transport, а не непомітно завантажувати повні source
 shards.
 
 ### Критерій завершення
 
-- Rust output побайтово ідентичний прийнятому контракту `.gturbo`.
+- Rust output відповідає GTurbo V1 codecs і accepted Swift output окремо для
+  Gemma та Qwen 4/6/8-bit fixtures.
 - Перервані installs продовжуються після перевірки завершених ranges.
 - Пошкоджені ranges завантажуються повторно.
 - Peak scratch залишається обмеженим.
@@ -661,9 +776,10 @@ shards.
 ```bash
 turbofieldfare install --output scratch/gemma4.gturbo
 turbofieldfare run --model scratch/gemma4.gturbo --prompt "Hello"
-turbofieldfare serve --model scratch/gemma4.gturbo --port 8080
-turbofieldfare inspect --model scratch/gemma4.gturbo
-turbofieldfare benchmark --model scratch/gemma4.gturbo
+turbofieldfare install --family qwen36 --bits 6 --output scratch/qwen36.gturbo
+turbofieldfare serve --model scratch/qwen36.gturbo --port 8080
+turbofieldfare inspect --model scratch/qwen36.gturbo
+turbofieldfare benchmark --model scratch/qwen36.gturbo
 ```
 
 `serve` може керувати окремими API і worker processes, залишаючись однією
@@ -681,10 +797,10 @@ runtime. Інші проєкти можуть зібрати власний serv
 | Вимір | Критерій |
 | --- | --- |
 | HTTP | Повний паритет black-box contract |
-| Коректність | Проходять kernel/reference і generation fixtures |
-| Якість | Проходять прийняті gates для delta-NLL і top-k agreement |
-| Decode | Не менше 98% зафіксованого Swift baseline |
-| Prefill | Не менше 95% для fallback; без регресії M5 TensorOps |
+| Коректність | Проходять kernel/reference і generation fixtures обох families |
+| Якість | Gates delta-NLL і top-k проходять для кожної family/quantization |
+| Decode | Не менше 98% відповідного Swift family baseline |
+| Prefill | Не менше 95% відповідного fallback; без регресії M5 TensorOps |
 | TTFT | Регресія не більше 5% |
 | Пам'ять | Регресія physical footprint не більше 10% |
 | I/O | Обмежені reads, slots, descriptors і queues |
@@ -694,6 +810,7 @@ runtime. Інші проєкти можуть зібрати власний serv
 | Повторне використання | Публічні crates мають examples і збираються поза product binary |
 | Пакування | `cargo package` проходить для кожного кандидата на публікацію |
 | Сумісність | Wire protocol, public Rust API і `.gturbo` versioned незалежно |
+| Розширюваність | Synthetic третя MoE family додається без змін у shared core |
 
 Це початкові migration gates, а не постійні межі продуктивності. Після
 стабілізації вимірювань Rust їх слід посилити.
@@ -716,14 +833,13 @@ runtime. Інші проєкти можуть зібрати власний serv
 Rust HTTP mock
 -> Rust API + Swift worker
 -> повний OpenAI API на Rust
--> перевірка model/tokenizer на Rust
--> перший Metal kernel із Rust host
--> паритет kernels
--> перший token, згенерований Rust
--> Rust decode
--> Rust prefill
+-> GTurbo V1 codecs + Gemma/Qwen descriptors на Rust
+-> спільний MoE Metal primitive із Rust host
+-> Gemma first token -> Gemma decode/prefill parity
+-> Qwen first token -> Qwen decode/prefill parity
+-> Qwen 4/6/8-bit і optional MTP parity
 -> production worker на Rust
--> installer на Rust
+-> Gemma/Qwen installer adapters на Rust
 -> видалення Swift і UI
 ```
 
