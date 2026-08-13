@@ -79,60 +79,128 @@ production-шляху.
 
 ## Цільовий Cargo workspace
 
-Workspace зростає поступово; не всі crates мають з'явитися першого дня.
+Workspace зростає поступово; не всі crates мають з'явитися першого дня. Уся
+поведінка живе в library crates. Виконувані targets лише читають конфігурацію,
+з'єднують реалізації та керують lifecycle процесів.
 
 ```text
 rust/
   Cargo.toml
   crates/
-    protocol/          версіоновані IPC DTO та спільні fixtures
-    openai-api/        Axum routes, SSE, Files і Batch
-    model-format/      manifest, layout та integrity для .gturbo
-    tokenizer/         tokenizer, chat template і tool parsing
-    metal-runtime/     безпечний API проєкту поверх objc2-metal
-    kernels/           Rust host wrappers для наявних MSL kernels
-    inference/         model, KV cache, prefill, decode і sampling
-    worker/            inference IPC service
-    repack/            installer з обмеженим streaming
-    cli/               install, run, serve, inspect, compare, benchmark
+    inference-core/       доменні request/event/usage та backend/model traits
+    protocol/             версіоновані IPC frames і core <-> wire conversion
+    ipc-client/           UDS client, reconnect і реалізація backend trait
+    openai-api/           Axum routes, OpenAI adapter, SSE, Files і Batch
+
+    gturbo-format/        manifest, layout, indexes і receipt без I/O політики
+    gturbo-store/         mmap/pread, integrity та bounded tensor/expert reads
+    model-source/         Hub metadata, range transport і source tensors
+
+    gemma4-tokenizer/     tokenizer, chat template і tool parsing Gemma 4
+    llm-sampling/         sampling, stop conditions і deterministic RNG
+    llm-kv-cache/         загальні типи та політики KV cache
+    metal-tensor-types/   shapes, dtypes, layouts і checked byte ranges
+    metal-runtime/        безпечний API проєкту поверх objc2-metal
+    gemma4-kernels/       Rust host wrappers для MSL kernels Gemma 4
+    moe-expert-cache/     slots, LFU planning і bounded expert streaming
+    gemma4-inference/     layers, forward, prefill і decode Gemma 4
+
+    runtime/              model lifecycle і реалізація inference-core traits
+    worker/               IPC service, queue, cancellation і usage accounting
+    repack/               bounded installer/repacker як library API
+    test-support/         mock backend, golden fixtures і reusable harnesses
+
+  bins/
+    turbofieldfare/        terminal CLI, installer commands і supervisor
+    turbofieldfare-api/    тонкий HTTP process: openai-api + ipc-client
+    turbofieldfare-worker/ тонкий worker process
+  shaders/
+    gemma4/                MSL sources та metallib build inputs
+  xtask/                   build metallib, fixtures, publish і conformance tasks
 ```
 
-Бажаний напрям залежностей:
+Назви директорій можуть бути короткими, але package names перед публікацією
+мають бути однозначними, наприклад `turbofieldfare-inference-core`,
+`turbofieldfare-openai-api` і `gturbo-format`.
+
+Бажаний ациклічний напрям залежностей:
 
 ```text
-cli -> openai-api -> protocol <- worker -> inference
-                                      inference -> tokenizer
-                                      inference -> model-format
-                                      inference -> kernels -> metal-runtime
-repack -> model-format
+turbofieldfare bin -> ipc-client, repack; запускає API/worker processes
+api bin            -> openai-api, ipc-client
+worker bin         -> worker, runtime
+
+openai-api -> inference-core
+ipc-client -> protocol, inference-core
+worker     -> protocol, inference-core
+runtime    -> inference-core, gemma4-inference
+protocol   -> inference-core
+
+gemma4-inference -> gemma4-tokenizer, gemma4-kernels, llm-sampling,
+                    llm-kv-cache, gturbo-store, moe-expert-cache
+gemma4-kernels   -> metal-tensor-types, metal-runtime
+moe-expert-cache -> gturbo-store
+gturbo-store     -> gturbo-format
+repack           -> gturbo-format, model-source
 ```
 
-`protocol` не повинен залежати від Axum, OpenAI SDK types, Swift types або
-Metal.
+### Правила меж crates
+
+- `inference-core` не знає про HTTP, IPC, Gemma, Metal або конкретний storage.
+- `protocol` містить лише versioned wire contract і conversion; він не містить
+  Axum/OpenAI/Swift/Metal types і не є власником бізнес-логіки.
+- `openai-api` залежить від trait, а не від Gemma або Metal implementation.
+- `ipc-client` є окремою реалізацією backend trait; HTTP crate не знає, чи
+  backend локальний, IPC або тестовий.
+- `gturbo-format` не виконує network чи Metal I/O; `gturbo-store` не знає про
+  HTTP або OpenAI.
+- `metal-runtime` не знає про Gemma; model-specific pipelines залишаються в
+  `gemma4-kernels`.
+- `gemma4-inference` не відкриває sockets і не формує OpenAI responses.
+- `MockBackend` і test fixtures належать `test-support`, а не production crates.
+- Feature flags вмикають лише необов'язкові інтеграції; вони не створюють дві
+  різні семантики одного API.
+- Заборонені циклічні залежності та імпорт із executable crate у library crate.
+
+### Публікація і повторне використання
+
+Crates поділяються не за принципом «усе опублікувати», а за стабільністю
+контракту:
+
+| Група | Crates | Політика |
+| --- | --- | --- |
+| Публічні першими | `inference-core`, `openai-api`, `protocol`, `gturbo-format` | SemVer, rustdoc, examples, changelog і conformance tests |
+| Публічні після паритету | `ipc-client`, `llm-sampling`, `llm-kv-cache`, `metal-tensor-types`, `metal-runtime`, `gturbo-store`, `moe-expert-cache`, `model-source` | Публікувати після стабілізації transport, unsafe та I/O контрактів |
+| Model-specific | `gemma4-tokenizer`, `gemma4-kernels`, `gemma4-inference` | Reusable для інших Gemma 4 застосунків, але без обіцянки універсальності |
+| Внутрішня композиція | `runtime`, `worker`, `repack`, binaries, `test-support`, `xtask` | Спочатку `publish = false`; публікувати лише за наявності окремого use case |
+
+Публічний crate повинен мати мінімальний standalone example, README, ліцензію,
+MSRV policy, задокументовані safety invariants і `cargo package` check. Його
+public API не повинен вимагати unpublished path dependency.
 
 ## Повторне використання Rust-екосистеми
 
 Точні версії слід зафіксувати в `Cargo.lock`, а оновлення виконувати свідомо.
 
-| Задача | Початковий вибір crate |
-| --- | --- |
-| Async runtime | `tokio` |
-| HTTP routing | `axum` |
-| HTTP limits, request IDs, tracing | `tower-http` |
-| OpenAI wire types | `openai-protocol` за локальним adapter |
-| Serialization | `serde`, `serde_json` |
-| IPC framing | `tokio-util` |
-| Cancellation і streams | `tokio-util`, `tokio-stream`, `futures-util` |
-| CLI | `clap` |
-| Errors і diagnostics | `thiserror`, `tracing`, `tracing-subscriber` |
-| Metal bindings | `objc2`, `objc2-foundation`, `objc2-metal` |
-| FP16/BF16 і POD data | `half`, `bytemuck` |
-| Memory maps і POSIX I/O | `memmap2`, `rustix` |
-| Tokenization і templates | `tokenizers`, `minijinja` |
-| Hub/range transport | `hf-hub`, `reqwest` |
-| Model sources | `safetensors`, де це спрощує parsing |
-| Integrity | `sha2` |
-| Tests і microbenchmarks | `proptest`, `criterion` |
+| Задача | Готові crates | Наш шар |
+| --- | --- | --- |
+| Async runtime | `tokio` | binaries, `worker`, `openai-api` |
+| HTTP routing | `axum` | `openai-api` |
+| HTTP limits, request IDs, tracing | `tower-http` | `openai-api` |
+| OpenAI wire types | `openai-protocol` | локальний adapter у `openai-api` |
+| Serialization | `serde`, `serde_json` | `protocol`, format/config crates |
+| IPC framing | `tokio-util` | `protocol`, `ipc-client` і transport у `worker` |
+| Cancellation і streams | `tokio-util`, `tokio-stream`, `futures-util` | `inference-core`, API і worker |
+| CLI | `clap` | тонкий `turbofieldfare` binary |
+| Errors і diagnostics | `thiserror`, `tracing`, `tracing-subscriber` | усі межі компонентів |
+| Metal bindings | `objc2`, `objc2-foundation`, `objc2-metal` | `metal-runtime` |
+| FP16/BF16 і POD data | `half`, `bytemuck` | `metal-tensor-types`, kernels |
+| Memory maps і POSIX I/O | `memmap2`, `rustix` | `gturbo-store` |
+| Tokenization і templates | `tokenizers`, `minijinja` | `gemma4-tokenizer` |
+| Hub/range transport | `hf-hub`, `reqwest` | `model-source` |
+| Model sources | `safetensors` | `model-source`, де це спрощує parsing |
+| Integrity | `sha2` | `gturbo-format`, `gturbo-store`, `repack` |
+| Tests і microbenchmarks | `proptest`, `criterion` | `test-support`, crate-local benches |
 
 `openai-protocol` скорочує роботу з wire types, але не замінює специфічну для
 TurboFieldfare валідацію. Локальними залишаються правила для model IDs, `n=1`,
@@ -174,10 +242,17 @@ base URL, а еталонний benchmark повторюється без ред
 Почати лише з:
 
 ```text
+inference-core
 protocol
 openai-api
-cli
+test-support
+turbofieldfare bin
 ```
+
+Bootstrap може тимчасово початися з `protocol`, `openai-api` і CLI, але до
+завершення етапу доменні generation types і `InferenceBackend` мають бути
+винесені в `inference-core`, а mock — у `test-support`. Це не дозволяє
+початковій структурі випадково стати постійним монолітом.
 
 Реалізувати:
 
@@ -191,9 +266,9 @@ cli
 - request cancellation та обмежений backpressure
 - структуроване логування request і phase
 
-Mock backend генерує детерміновані події `prepared`, `content`, `tool_call`,
-`completed` і `failed`. Він має дозволяти тестувати slow clients і cancellation
-без моделі.
+Mock backend з `test-support` генерує детерміновані події `prepared`, `content`,
+`tool_call`, `completed` і `failed`. Він має дозволяти тестувати slow clients і
+cancellation без моделі.
 
 ### Навчальні цілі
 
@@ -210,6 +285,8 @@ Mock backend генерує детерміновані події `prepared`, `c
 - HTTP contract fixtures проходять для реалізованих routes.
 - Від'єднання streaming client скасовує mock generation.
 - Повільні clients не спричиняють необмежену буферизацію.
+- `openai-api` не залежить від mock, concrete model, IPC або Metal.
+- `cargo doc` і standalone mock-server example збираються без Swift/Metal.
 
 ## Етап 2: версіонований IPC v1
 
@@ -238,6 +315,15 @@ shutdown
 prompt-cache mode та maximum concurrency. Протокол містить явні категорії
 queue-full, worker-busy, invalid-request, model-error, cancelled і
 internal-error.
+
+`inference-core` залишається власником неверсіонованих доменних типів.
+`protocol` володіє лише wire frames v1 і явними conversions. Це дозволяє
+розвивати in-process backend API та IPC versioning незалежно.
+
+`ipc-client` реалізує `InferenceBackend` поверх Unix socket, correlation IDs,
+reconnect і cancellation. `worker` реалізує серверний transport та викликає
+переданий йому backend. Тому ні `openai-api`, ні `worker` не залежать від
+конкретної Gemma/Metal реалізації.
 
 ### Межа відповідальності
 
@@ -317,6 +403,10 @@ Batch надсилає звичайні generation requests через IPC і н
 
 ## Етап 5: Rust-шар `.gturbo` і tokenizer
 
+Роботу розділити між `gturbo-format`, `gturbo-store` і `gemma4-tokenizer`.
+Format crate описує bytes і layout, store реалізує bounded reads та integrity,
+а tokenizer містить лише model-specific text contract.
+
 Перенести без Metal execution:
 
 - parsing manifest і verified-install receipt
@@ -337,10 +427,13 @@ Batch надсилає звичайні generation requests через IPC і н
 - Tool-call structures збігаються.
 - Corrupt, truncated, misaligned або incompatible models безпечно відхиляються.
 - Жоден test або loader не розміщує tensor масштабу моделі в Rust heap.
+- `gturbo-format` має standalone inspect example без Metal і inference.
+- `gemma4-tokenizer` тестується без model weights і GPU.
 
 ## Етап 6: фундамент Metal на Rust
 
-Створити невеликий безпечний API проєкту поверх `objc2-metal` для:
+Спочатку створити `metal-tensor-types` без Objective-C залежностей, потім
+невеликий безпечний API проєкту `metal-runtime` поверх `objc2-metal` для:
 
 - device і capability discovery
 - command queues, command buffers і compute encoders
@@ -370,10 +463,13 @@ source compilation може залишитися явним development fallback
 - Звільнення resources не може змагатися з GPU work у виконанні.
 - Помилки pipeline compilation і cache спостережувані.
 - Release startup не потребує runtime MSL compilation.
+- CPU-only tests для shapes/layouts не лінкують Metal framework.
+- `metal-runtime` не імпортує Gemma-specific constants або pipelines.
 
 ## Етап 7: перенести host wrappers для kernels
 
-Повторно використати наявний MSL і замінити лише Swift host orchestration.
+У `gemma4-kernels` повторно використати наявний MSL і замінити лише Swift host
+orchestration.
 Рекомендований порядок:
 
 1. embedding lookup
@@ -403,6 +499,9 @@ reduction.
 
 ## Етап 8: пам'ять моделі та expert streaming
 
+Розмістити загальний bounded storage у `gturbo-store`, а slot planning і
+MoE-специфічний lifecycle — у `moe-expert-cache`.
+
 Перенести:
 
 - read-only mapping спільних weights
@@ -428,6 +527,10 @@ reduction.
 - Physical footprint і вплив file cache звітуються окремо.
 
 ## Етап 9: Rust decode worker
+
+Decode model збирається в `gemma4-inference`; `runtime` адаптує її до
+`inference-core`, а `worker` додає IPC, авторитетну чергу і lifecycle. Жоден із
+цих шарів не дублює OpenAI validation.
 
 Перенести:
 
@@ -513,7 +616,9 @@ Validation, Metal Debugger, Metal System Trace і release-mode вимірюва�
 
 ## Етап 12: Rust installer і repacker
 
-Переносити repacker останнім. Зберегти:
+Переносити repacker останнім. `model-source` відповідає за source metadata і
+bounded range transport, `repack` — за conversion/checkpoint policy, а
+`gturbo-format` — за target layout. Зберегти:
 
 - pinned model revision і accepted source index
 - bounded HTTP range downloads
@@ -564,6 +669,11 @@ turbofieldfare benchmark --model scratch/gemma4.gturbo
 `serve` може керувати окремими API і worker processes, залишаючись однією
 командою для оператора.
 
+Усі три binaries залишаються тонкими: CLI лише керує командами/processes, API
+binary компонує HTTP з IPC client, а worker binary компонує IPC service з
+runtime. Інші проєкти можуть зібрати власний server, worker або embedded runtime
+із тих самих library crates.
+
 ## Наскрізні приймальні критерії
 
 Компонент не видаляється, доки заміна не пройде всі відповідні перевірки:
@@ -580,6 +690,10 @@ turbofieldfare benchmark --model scratch/gemma4.gturbo
 | I/O | Обмежені reads, slots, descriptors і queues |
 | Cancellation | Перевірено lifecycle HTTP -> API -> worker -> Metal |
 | Безпека | Немає другого model process і віддаленого доступу без auth |
+| Архітектура | Немає циклів; executable crates не містять доменної логіки |
+| Повторне використання | Публічні crates мають examples і збираються поза product binary |
+| Пакування | `cargo package` проходить для кожного кандидата на публікацію |
+| Сумісність | Wire protocol, public Rust API і `.gturbo` versioned незалежно |
 
 Це початкові migration gates, а не постійні межі продуктивності. Після
 стабілізації вимірювань Rust їх слід посилити.
@@ -593,6 +707,7 @@ turbofieldfare benchmark --model scratch/gemma4.gturbo
 3. незалежні докази коректності;
 4. визначений benchmark лише тоді, коли може змінитися performance;
 5. документацію припущень і відхилених альтернатив.
+6. мінімальний reusable API або чітке обґрунтування `publish = false`.
 
 Уникати великих переписувань, які вперше запускаються через місяці роботи.
 Послідовність видимих результатів:
@@ -614,7 +729,18 @@ Rust HTTP mock
 
 ## Найближчий етап
 
-Перший implementation PR після цього плану має створити Cargo workspace, crate
-з IPC DTO, mock backend і Rust-реалізації `/health`, `/v1/models` та
-`/v1/chat/completions` із non-streaming і SSE contract tests. Він не повинен
-змінювати поведінку inference runtime або видаляти наявні Swift targets.
+Поточний Phase 1 bootstrap створює Cargo workspace, IPC/domain DTO, mock backend
+і Rust-реалізації `/health`, `/v1/models` та `/v1/chat/completions` із
+non-streaming і SSE contract tests. Перед початком IPC integration межі потрібно
+довести до цільового стану цього плану:
+
+1. створити `inference-core` і перенести туди backend trait та доменні події;
+2. перенести наявні доменні типи з `protocol` і зарезервувати його лише для
+   versioned wire frames та conversions етапу 2;
+3. перенести mock backend у `test-support`;
+4. зробити CLI тонким composition root;
+5. додати standalone example і перевірку документації для `openai-api`.
+
+Цей крок не змінює inference runtime, IPC integration чи наявні Swift targets.
+Після нього Phase 2 може додати transport, не ламаючи публічний API server або
+model-specific crates.
