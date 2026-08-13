@@ -372,6 +372,19 @@ benchmark/conformance harness як контроль для JSON/tool-call gramma
 закриття family tags. Довільний JSON Schema — окремий пізніший capability після
 conformance matrix і явних resource limits для schema/grammar.
 
+### Рішення щодо telemetry та profiling
+
+Обрано варіант B: `runtime-observability` визначає стабільний versioned JSON
+envelope вже в ранніх API/IPC фазах, але disabled за замовчуванням і не торкається
+Metal або model I/O. Ранні події обмежені `request_id`, lifecycle phase,
+queue/admission, HTTP/IPC error category, event sequence та cache miss reason.
+
+Rust worker додає реальні decode/prefill, expert-cache, SSD I/O, GPU interval,
+RSS і allocation metrics у той самий envelope. Кожне поле має unit, scope,
+availability і privacy classification; prompts, tool arguments, URLs, headers,
+tokens та model bytes заборонені. `--profile-json` або еквівалент вмикається
+явно, а no-op path має окремий overhead benchmark.
+
 ## Етап 0: зафіксувати еталон
 
 ### Навчальні цілі
@@ -402,8 +415,9 @@ conformance matrix і явних resource limits для schema/grammar.
   відкрити tool-call region.
 - Startup fixtures: delayed readiness, worker crash before/after `ready`,
   reconnect і cleanup socket без запуску другого model process.
-- Machine-readable telemetry schema і redaction fixtures для request/config,
-  cache, I/O, GPU phase та memory metrics.
+- Machine-readable telemetry schema і redaction fixtures; ранній envelope
+  покриває request/lifecycle/cache, а I/O/GPU/memory fields реєструються як
+  unavailable до Rust worker.
 - Installer security fixtures: pinned source descriptor, redirect allowlist,
   auth-header forwarding only to approved hosts, resume/receipt provenance і
   відсутність secret у logs/errors.
@@ -943,7 +957,7 @@ runtime. Інші проєкти можуть зібрати власний serv
 | Streaming | Monotonic event sequence, lossless UTF-8 і рівно один terminal event |
 | Надійність | Worker readiness/crash/reconnect не дають stale socket, orphan або duplicate output |
 | Cache | Cache key містить template/dialect/config identity; кожен miss має reason code |
-| Observability | Versioned redacted telemetry показує phase, cache, I/O, GPU та memory; disabled path виміряний |
+| Observability | Ранній envelope показує phase/cache; Rust worker додає I/O/GPU/memory; disabled path виміряний |
 | Source trust | Receipt містить descriptor provenance; redirects і credentials проходять allowlist/redaction gates |
 | Архітектура | Немає циклів; executable crates не містять доменної логіки |
 | Повторне використання | Публічні crates мають examples і збираються поза product binary |
