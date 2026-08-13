@@ -60,6 +60,16 @@ Rust та inference-технологіям у нас залишатимутьс�
   kernels мають бути окремими експериментами.
 - Не видаляти UI, Swift server, CLI, repacker або еталонні тести лише для
   спрощення проміжного етапу.
+- Loopback є єдиним production режимом ранніх фаз. Майбутній Tailnet або інший
+  remote bind може існувати лише як окремий opt-in transport із явною політикою
+  авторизації, TLS/identity та bounded admission; `--host 0.0.0.0` не є
+  коротким шляхом у roadmap.
+- Модель не виконує інструменти сама: tool execution, мережеві credentials та
+  policy залишаються за клієнтом. Будь-який майбутній server-side tool runner
+  — окремий sandboxed продукт, disabled by default.
+- Кожна generation має незмінний validated config snapshot: model/family,
+  context, cache policy, quantization, sampling та constraints. Зміна CLI
+  default не може неявно змінити вже прийнятий request.
 
 ## Базові практики Apple
 
@@ -83,6 +93,18 @@ Rust та inference-технологіям у нас залишатимутьс�
 GPU family потрібно повторно перевірити ці джерела й таблиці Metal feature
 sets. Новіший API є кандидатом, а не автоматичною заміною виміряного
 production-шляху.
+
+### Матриця сумісності
+
+| Tier | Мінімум | Гарантія |
+| --- | --- | --- |
+| Production | macOS 26, актуальний Xcode Metal toolchain, Apple Silicon | Metal 4/TensorOps candidate paths, повний benchmark і release gates |
+| Compatibility | macOS 15, сумісний Xcode/Metal 3.2 | CPU/format/API та fallback kernels; окремі CI/tests, без обіцянки TensorOps performance |
+| Unsupported | не-Apple-Silicon, macOS 14 і нижче | Явна діагностика до model load, без часткового запуску |
+
+Capability discovery, а не назва chip чи compile SDK, обирає pipeline. Це
+зберігає можливість прийняти upstream macOS 15 fallback без послаблення
+production gates для сучасних Apple GPU.
 
 ## Що беремо з upstream PR №105
 
@@ -114,6 +136,29 @@ Qwen defaults у runtime types. У Rust-проєкті не можна буду�
 семантику manifest, tensor catalog і layer graph повністю перевіряє вибраний
 architecture adapter.
 
+## Висновки з усіх відкритих upstream PR та issues
+
+Станом на 2026-08-13 переглянуті 29 відкритих PR і 24 відкриті issues upstream.
+Нижче — тільки ті висновки, які треба закласти до Metal migration; це не
+означає прийняття кожного upstream implementation.
+
+| Ризик або потреба | Джерела | Раннє рішення в плані |
+| --- | --- | --- |
+| Дублікати/пошкодження long generation, незавершені SSE | #112, #70, #84, PR #107 | sequence-numbered events, lossless UTF-8 assembler, exactly-once terminal event, cross-process deterministic replay і long-generation soak fixtures |
+| Cache miss після повторного tool call | #73, PR #125 | typed cache identity: rendered-prefix digest, template/dialect ID, model/config generation; reason-coded hit/miss telemetry, а не пошук неоднозначної subsequence |
+| Tool schemas, repeated system messages, JSON output | #103, PR #26, PR #107 | нормалізація OpenAI input у API; `GenerationConstraint` capability в core/IPC; family adapter володіє dialect/parser, а не HTTP layer |
+| Реальні runtime controls і профілювання | PR #123, PR #119, PR #53 | versioned `RuntimeConfig`, immutable request snapshot, worker capabilities, stable JSON telemetry schema та budgeted instrumentation |
+| Друга/третя MoE family, 4/6/8-bit, long context | #44, #54, #102, PR #29, PR #105 | role-based quant capabilities, architecture registry, separate KV/linear state, per-family benchmark matrix і explicit resource estimate до load |
+| Installer trust, QAT/custom repos та CDN auth | #52, #109, PR #85, PR #98, PR #115 | source descriptor with trust level/pinned digest, redirect allowlist, secret redaction, receipt provenance та bounded range-transfer conformance tests |
+| Startup/worker availability | #25, PR #88, PR #126 | supervisor owns worker; readiness is socket handshake, never a guessed PID; bounded retry/backoff and typed unavailable state, without second model process |
+| Compatibility floor | #19, PR #32, PR #110, #121 | capability-based Metal policy and explicit support matrix; macOS 26 is production baseline, macOS 15 fallback is separately tested compatibility tier |
+| Remote access і external tools | #120, PR #22, PR #79, #122 | loopback default remains invariant; remote binding/tool runner are separate security milestones, not options silently added to API server |
+| Files/Batch, multi-turn, media | PR #57, #74, #51, #11, #18, #9 | durable job state and prompt history contracts belong above inference; media is a future capability with bounded `MediaRef`, never an untyped HTTP blob passed to runtime |
+
+UI-only PRs (#91, #99, #114, #68, #15) і app packaging issues (#48, #86,
+#104) не змінюють Rust terminal/MoE boundaries. Їх можна переосмислити після
+terminal-only migration як незалежні clients над OpenAI API.
+
 ## Цільовий Cargo workspace
 
 Workspace зростає поступово; не всі crates мають з'явитися першого дня. Уся
@@ -128,6 +173,8 @@ rust/
     protocol/             версіоновані IPC frames і core <-> wire conversion
     ipc-client/           UDS client, reconnect і реалізація backend trait
     openai-api/           Axum routes, OpenAI adapter, SSE, Files і Batch
+    runtime-config/       validated immutable config snapshots і capabilities
+    runtime-observability/ versioned metrics/events, no-op by default
 
     moe-core/             architecture/executor traits, topology і tensor roles
     gturbo-format/        manifest, layout, indexes і receipt без I/O політики
@@ -176,13 +223,14 @@ turbofieldfare bin -> ipc-client, repack-core; запускає API/worker proce
 api bin            -> openai-api, ipc-client
 worker bin         -> worker, moe-runtime, gemma4-metal, qwen36-metal
 
-openai-api -> inference-core
-ipc-client -> protocol, inference-core
-worker     -> protocol, inference-core
-protocol   -> inference-core
+openai-api -> inference-core, runtime-config
+ipc-client -> protocol, inference-core, runtime-config
+worker     -> protocol, inference-core, runtime-config, runtime-observability
+protocol   -> inference-core, runtime-config
 
-moe-runtime -> inference-core, moe-core, gturbo-store, llm-prompt,
-               llm-sampling, llm-kv-cache, moe-expert-cache
+moe-runtime -> inference-core, moe-core, runtime-config, runtime-observability,
+               gturbo-store, llm-prompt, llm-sampling, llm-kv-cache,
+               moe-expert-cache
 gemma4-arch -> moe-core, gturbo-format, llm-prompt
 qwen36-arch -> moe-core, gturbo-format, llm-prompt
 moe-metal-kernels -> metal-tensor-types, metal-runtime
@@ -195,6 +243,10 @@ gemma4-repack, qwen36-repack -> repack-core, model-source, gturbo-format
 ### Правила меж crates
 
 - `inference-core` не знає про HTTP, IPC, model family, Metal або storage.
+- `runtime-config` не читає environment або CLI самостійно: parsing належить
+  binaries, а цей crate тільки canonicalizes/validates values та capabilities.
+- `runtime-observability` не керує lifecycle і має cheap disabled path; його
+  event schema versioned та не містить prompts, credentials чи model bytes.
 - `moe-core` описує лише стабільні MoE concepts та traits. Нова family не може
   додати до нього прапорець, доки спільний concept не доведено двома adapters.
 - `protocol` містить лише versioned wire contract і conversion; він не містить
@@ -257,10 +309,10 @@ Crates поділяються не за принципом «усе опублі
 
 | Група | Crates | Політика |
 | --- | --- | --- |
-| Публічні першими | `inference-core`, `openai-api`, `protocol`, `gturbo-format`, `moe-core` | SemVer, rustdoc, examples, changelog і conformance tests |
+| Публічні першими | `inference-core`, `openai-api`, `protocol`, `runtime-config`, `gturbo-format`, `moe-core` | SemVer, rustdoc, examples, changelog і conformance tests |
 | Публічні після паритету | `ipc-client`, `llm-prompt`, `llm-sampling`, `llm-kv-cache`, `metal-tensor-types`, `metal-runtime`, `moe-metal-kernels`, `gturbo-store`, `moe-expert-cache`, `model-source` | Публікувати після стабілізації transport, unsafe та I/O контрактів |
 | Model-specific | `gemma4-arch`, `gemma4-metal`, `gemma4-repack`, `qwen36-arch`, `qwen36-metal`, `qwen36-repack` | Reusable family adapters без обіцянки універсальності |
-| Внутрішня композиція | `moe-runtime`, `worker`, `repack-core`, binaries, `test-support`, `xtask` | Спочатку `publish = false`; публікувати лише за наявності окремого use case |
+| Внутрішня композиція | `runtime-observability`, `moe-runtime`, `worker`, `repack-core`, binaries, `test-support`, `xtask` | Спочатку `publish = false`; публікувати лише за наявності окремого use case |
 
 Публічний crate повинен мати мінімальний standalone example, README, ліцензію,
 MSRV policy, задокументовані safety invariants і `cargo package` check. Його
@@ -319,6 +371,21 @@ schemas, історичних tool calls і фактичних context limits.
 - Generation fixtures із фіксованим seed для кожної family/quantization.
 - Performance baseline за community protocol окремо для кожної перевіреної
   family, quantization, context shape та cache mode.
+- Long-generation conformance fixtures: stream output рівно один раз,
+  monotonic event sequence, коректний UTF-8, один terminal event і відсутність
+  дублювання при cancellation/failure/reconnect.
+- Prompt-cache fixtures з repeated identical tool calls, повторними system
+  messages та явним reason code для кожного hit/miss.
+- Conformance matrix для JSON/tool constraints: every accepted constrained
+  output parses under the selected family dialect; no-tools request не може
+  відкрити tool-call region.
+- Startup fixtures: delayed readiness, worker crash before/after `ready`,
+  reconnect і cleanup socket без запуску другого model process.
+- Machine-readable telemetry schema і redaction fixtures для request/config,
+  cache, I/O, GPU phase та memory metrics.
+- Installer security fixtures: pinned source descriptor, redirect allowlist,
+  auth-header forwarding only to approved hosts, resume/receipt provenance і
+  відсутність secret у logs/errors.
 
 Фіксувати commit, hardware, RAM, версії macOS/Swift/Rust/Xcode, точні команди,
 exit codes, timing footers, energy mode і всі відхилення від протоколу.
@@ -327,6 +394,8 @@ exit codes, timing footers, energy mode і всі відхилення від п
 
 Один і той самий набір тестів зовнішнього контракту запускається для довільного
 base URL, а еталонний benchmark повторюється без редагування source code.
+Long-generation replay щонайменше у двох свіжих processes має однаковий output
+для greedy/fixed-seed case і має пояснювану event trace для sampling case.
 
 ## Етап 1: Rust OpenAI server із mock backend
 
@@ -352,14 +421,18 @@ Bootstrap може тимчасово початися з `protocol`, `openai-ap
 - `POST /v1/chat/completions`
 - non-streaming responses
 - SSE chunks, heartbeat, usage chunk і `[DONE]`
+- lossless incremental UTF-8 і monotonic `event_seq` у внутрішньому stream;
+  HTTP adapter не дублює content під час flush, abort або error
 - OpenAI error envelopes
 - ліміт звичайного request body 1 MiB
 - request cancellation та обмежений backpressure
-- структуроване логування request і phase
+- canonical `RuntimeConfig` snapshot і capability-aware validation
+- структуроване логування request і phase без prompt/secret content
 
 Mock backend з `test-support` генерує детерміновані події `prepared`, `content`,
-`tool_call`, `completed` і `failed`. Він має дозволяти тестувати slow clients і
-cancellation без моделі.
+`tool_call`, `completed` і `failed` з sequence number. Він має дозволяти
+тестувати slow clients, cancellation, duplicate-delivery defense, invalid UTF-8
+та failure after partial output без моделі.
 
 ### Навчальні цілі
 
@@ -376,6 +449,9 @@ cancellation без моделі.
 - HTTP contract fixtures проходять для реалізованих routes.
 - Від'єднання streaming client скасовує mock generation.
 - Повільні clients не спричиняють необмежену буферизацію.
+- Один request має рівно один terminal event; content events мають строго
+  зростаючу sequence і не повторюються після cancellation/error.
+- UTF-8 boundary tests покривають split scalar, tool JSON і heartbeats.
 - `openai-api` не залежить від mock, concrete model, IPC або Metal.
 - `cargo doc` і standalone mock-server example збираються без Swift/Metal.
 
@@ -386,6 +462,9 @@ payload. JSON робить першу версію протоколу зручн
 Rust, а framing усуває неоднозначність newline.
 
 Кожен frame містить `protocol_version`, `type` і, де доречно, `request_id`.
+Generation events також містять `event_seq`; worker ніколи не перевикористовує
+його в межах request. `generate` несе canonical config snapshot та optional
+constraint descriptor, а не необроблені HTTP fields.
 Початкові messages:
 
 ```text
@@ -402,10 +481,13 @@ ping / pong
 shutdown
 ```
 
-`ready` оголошує capabilities worker: model ID, maximum context, tool support,
-prompt-cache mode та maximum concurrency. Протокол містить явні категорії
-queue-full, worker-busy, invalid-request, model-error, cancelled і
-internal-error.
+`ready` оголошує versioned capabilities worker: model ID, architecture
+ID/schema, maximum context, modality, per-role quantization, cache modes,
+constraint kinds, optional MTP, runtime-control ranges та maximum concurrency.
+Він також містить config/capability digest, щоб API не прийняв request за
+застарілими припущеннями. Протокол містить явні категорії queue-full,
+worker-busy, invalid-request, unavailable, unsupported-capability,
+constraint-violation, model-error, cancelled і internal-error.
 
 `inference-core` залишається власником неверсіонованих доменних типів.
 `protocol` володіє лише wire frames v1 і явними conversions. Це дозволяє
@@ -415,6 +497,12 @@ internal-error.
 reconnect і cancellation. `worker` реалізує серверний transport та викликає
 переданий йому backend. Тому ні `openai-api`, ні `worker` не залежать від
 конкретної Gemma/Metal реалізації.
+
+`GenerationConstraint` — малий versioned descriptor (`none`, `json`,
+`tool-call` у v1), не implementation grammar. API нормалізує OpenAI request і
+перевіряє, що capability дозволена; worker/family adapter перевіряє та виконує
+конкретну grammar. Так tool choices, repeated system messages і family template
+не протікають у IPC як HTTP details.
 
 ### Межа відповідальності
 
@@ -439,6 +527,11 @@ Inference worker і вибраний architecture adapter відповідают
 - Невідомі protocol versions відхиляються до початку generation.
 - Розміри frames і queues обмежені.
 - Cancellation ідемпотентний і пов'язаний із request ID.
+- `event_seq` строго монотонний; API deduplicates repeated IPC event після
+  reconnect і не створює другого terminal response.
+- Capability/config digest mismatch завершується до enqueue з typed error.
+- Golden frames покривають config, constraints, unavailable worker і
+  unsupported family/quant/modality.
 
 ## Етап 3: Swift inference worker
 
@@ -454,6 +547,11 @@ Inference worker і вибраний architecture adapter відповідают
 5. Стрімити events і виконувати cancellation.
 6. Коректно завершуватися за signal від supervisor-власника.
 
+Supervisor володіє socket path, child process і cleanup. Готовність означає
+лише успішний `ready` handshake після model validation, не факт `spawn`, PID,
+launchd state або існування stale socket. Один bounded restart/reconnect policy
+повідомляє API typed `unavailable`; він ніколи не створює паралельний worker.
+
 ### Критерій завершення
 
 - Rust API разом зі Swift worker проходить HTTP contract suite старого Swift
@@ -467,6 +565,8 @@ Inference worker і вибраний architecture adapter відповідают
 - Регресія TTFT не перевищує 5%.
 - Decode throughput становить щонайменше 98% від in-process Swift baseline.
 - IPC memory залишається обмеженою для довгих responses і slow clients.
+- Crash до `ready`, crash під generation, stale socket і delayed startup мають
+  детермінований API результат та не залишають orphan model process.
 
 На цьому етапі Rust стає основним OpenAI-сумісним server. SwiftNIO server
 залишається еталоном до повного паритету Files/Batch і failure behavior.
@@ -483,7 +583,15 @@ Inference worker і вибраний architecture adapter відповідают
 - поточні metadata і compatibility limits
 
 Batch надсилає звичайні generation requests через IPC і ніколи не обходить
-межу серіалізації worker.
+межу серіалізації worker. Це OpenAI Batch API, а не GPU micro-batching:
+авторитетний worker лишається single-active-generation, доки окремий benchmark
+не доведе безпечний інший режим.
+
+Files, Batch і conversation history зберігаються над IPC у versioned durable
+store з ownership/expiry. Runtime отримує тільки нормалізований request. Media
+не входить у цей етап: майбутній `MediaRef` матиме ID, MIME, dimensions/bytes
+limit і explicit architecture capability, а не передаватиме довільні binary
+blobs у tokenizer або Metal layer.
 
 ### Критерій завершення
 
@@ -491,6 +599,8 @@ Batch надсилає звичайні generation requests через IPC і н
 - Batch status transitions і result/error JSONL збігаються.
 - Cancellation правильно доходить до queued та active work.
 - Семантика server restart явно визначена й протестована.
+- Job transitions і output/error JSONL є idempotent за request/job IDs після
+  API restart; worker retry не дублює completed output.
 - SwiftNIO більше не потрібен у production launch path.
 
 ## Етап 5: GTurbo V1, MoE descriptors і family adapters без Metal
@@ -733,7 +843,10 @@ bounded range transport, `repack-core` — за checkpoint/writer policy,
 `gemma4-repack` і `qwen36-repack` — за source tensor mapping та quantization
 plan, а `gturbo-format` — за target layout. Зберегти:
 
-- pinned model revision і accepted source index
+- `ModelSourceDescriptor`: family, source format, repo/revision, expected
+  index/digest, allowed redirect hosts, credential policy і trust level
+- curated pinned source як default; custom repo/revision лише explicit
+  untrusted descriptor, який не може маскуватися під curated receipt
 - bounded HTTP range downloads
 - відсутність повного checkpoint або shard на disk
 - tile-sized scratch
@@ -746,7 +859,9 @@ plan, а `gturbo-format` — за target layout. Зберегти:
 Safetensors читається тільки через `model-source`/family repack adapter.
 `hf-hub` може надати Hub metadata та authentication, але реалізація має
 зберегти bounded range transport, а не непомітно завантажувати повні source
-shards.
+shards. Authorization може пережити redirect лише до explicit allowlist CDN
+hosts; на будь-якому іншому host він знімається. URLs, tokens та headers не
+потрапляють у telemetry, errors або receipt.
 
 ### Критерій завершення
 
@@ -756,6 +871,8 @@ shards.
 - Пошкоджені ranges завантажуються повторно.
 - Peak scratch залишається обмеженим.
 - Повний source checkpoint не створюється.
+- Pinned і custom-source receipts мають різний provenance; redirect, 403 та
+  resume cases проходять без витоку bearer token.
 
 ## Етап 13: перехід до terminal-only продукту
 
@@ -806,6 +923,11 @@ runtime. Інші проєкти можуть зібрати власний serv
 | I/O | Обмежені reads, slots, descriptors і queues |
 | Cancellation | Перевірено lifecycle HTTP -> API -> worker -> Metal |
 | Безпека | Немає другого model process і віддаленого доступу без auth |
+| Streaming | Monotonic event sequence, lossless UTF-8 і рівно один terminal event |
+| Надійність | Worker readiness/crash/reconnect не дають stale socket, orphan або duplicate output |
+| Cache | Cache key містить template/dialect/config identity; кожен miss має reason code |
+| Observability | Versioned redacted telemetry показує phase, cache, I/O, GPU та memory; disabled path виміряний |
+| Source trust | Receipt містить descriptor provenance; redirects і credentials проходять allowlist/redaction gates |
 | Архітектура | Немає циклів; executable crates не містять доменної логіки |
 | Повторне використання | Публічні crates мають examples і збираються поза product binary |
 | Пакування | `cargo package` проходить для кожного кандидата на публікацію |
@@ -856,6 +978,10 @@ non-streaming і SSE contract tests. Перед початком IPC integration
 3. перенести mock backend у `test-support`;
 4. зробити CLI тонким composition root;
 5. додати standalone example і перевірку документації для `openai-api`.
+6. додати `runtime-config` з canonical config snapshot/capability types і
+   `event_seq`/terminal-event invariants у mock contract;
+7. визначити redacted telemetry envelope та cache miss reason codes, не
+   додаючи ще реального IPC чи Metal instrumentation.
 
 Цей крок не змінює inference runtime, IPC integration чи наявні Swift targets.
 Після нього Phase 2 може додати transport, не ламаючи публічний API server або
