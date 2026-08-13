@@ -45,8 +45,9 @@ Rust та inference-технологіям у нас залишатимутьс�
 
 ## Основні обмеження
 
-- Залишити публічний сервер на `127.0.0.1`: він не має віддаленої
-  автентифікації чи TLS.
+- За замовчуванням сервер bind-иться на `127.0.0.1` і не потребує auth/TLS.
+  General `--host` є цільовою можливістю продукту, але non-loopback bind
+  fail-closed без окремої remote-security конфігурації.
 - Завантажувати модель рівно в одному worker-процесі.
 - Зберегти авторитетну чергу з одним активним generation у worker. API може
   обмежувати прийом запитів, але не повинен бути єдиною межею серіалізації.
@@ -60,10 +61,10 @@ Rust та inference-технологіям у нас залишатимутьс�
   kernels мають бути окремими експериментами.
 - Не видаляти UI, Swift server, CLI, repacker або еталонні тести лише для
   спрощення проміжного етапу.
-- Loopback є єдиним production режимом ранніх фаз. Майбутній Tailnet або інший
-  remote bind може існувати лише як окремий opt-in transport із явною політикою
+- Loopback є єдиним production режимом ранніх фаз. Пізніше general `--host`
+  дозволяє LAN/remote bind як окремий opt-in transport із явною політикою
   авторизації, TLS/identity та bounded admission; `--host 0.0.0.0` не є
-  коротким шляхом у roadmap.
+  коротким шляхом для вимкнення цих перевірок.
 - Модель не виконує інструменти сама: tool execution, мережеві credentials та
   policy залишаються за клієнтом. Будь-який майбутній server-side tool runner
   — окремий sandboxed продукт, disabled by default.
@@ -153,7 +154,7 @@ architecture adapter.
 | Installer trust, QAT/custom repos та CDN auth | #52, #109, PR #85, PR #98, PR #115 | на етапах міграції лише curated pinned descriptors; redirect allowlist, secret redaction, receipt provenance та bounded range-transfer conformance tests |
 | Startup/worker availability | #25, PR #88, PR #126 | supervisor owns worker; readiness is socket handshake, never a guessed PID; bounded retry/backoff and typed unavailable state, without second model process |
 | Compatibility floor | #19, PR #32, PR #110, #121 | macOS 26+ only; upstream macOS 15 fallback не входить у Rust migration scope, unsupported host fail-fast до model load |
-| Remote access і external tools | #120, PR #22, PR #79, #122 | loopback default remains invariant; remote binding/tool runner are separate security milestones, not options silently added to API server |
+| Remote access і external tools | #120, PR #22, PR #79, #122 | loopback default; general `--host` як окремий fail-closed security milestone, tool runner — окремий sandboxed продукт |
 | Files/Batch, multi-turn, media | PR #57, #74, #51, #11, #18, #9 | durable job state and prompt history contracts belong above inference; media is a future capability with bounded `MediaRef`, never an untyped HTTP blob passed to runtime |
 
 UI-only PRs (#91, #99, #114, #68, #15) і app packaging issues (#48, #86,
@@ -949,6 +950,26 @@ binary компонує HTTP з IPC client, а worker binary компонує IP
 runtime. Інші проєкти можуть зібрати власний server, worker або embedded runtime
 із тих самих library crates.
 
+### Окремий security milestone: general `--host`
+
+Після terminal/API parity додати general bind як окремий продуктний етап, не як
+зміну default у `serve`:
+
+- `--host 127.0.0.1` лишається default і працює без credentials;
+- `--host <non-loopback>` вимагає explicit remote-security config; відсутня,
+  неповна або невалідна конфігурація завершує запуск до bind;
+- remote mode має TLS/identity, authentication, bounded request/connection
+  admission, rate limits, audit events без prompt/secret content і documented
+  credential rotation;
+- `/health` має окрему, навмисно визначену policy; інші OpenAI routes не
+  допускають anonymous access;
+- security tests покривають wildcard/LAN/IPv6 binds, missing/expired TLS,
+  invalid credentials, queue exhaustion, log redaction та loopback regression.
+
+Конкретний identity mechanism обирається окремо перед реалізацією. Tool runner
+не є наслідком remote bind: він лишається disabled-by-default sandboxed
+capability з власною policy.
+
 ## Наскрізні приймальні критерії
 
 Компонент не видаляється, доки заміна не пройде всі відповідні перевірки:
@@ -964,7 +985,7 @@ runtime. Інші проєкти можуть зібрати власний serv
 | Пам'ять | Регресія physical footprint не більше 10% |
 | I/O | Обмежені reads, slots, descriptors і queues |
 | Cancellation | Перевірено lifecycle HTTP -> API -> worker -> Metal |
-| Безпека | Немає другого model process і віддаленого доступу без auth |
+| Безпека | Немає другого model process; non-loopback bind fail-closed без remote security |
 | Streaming | Monotonic event sequence, lossless UTF-8 і рівно один terminal event |
 | Надійність | Worker readiness/crash/reconnect не дають stale socket, orphan або duplicate output |
 | Cache | Cache key містить template/dialect/config identity; кожен miss має reason code |
