@@ -67,9 +67,10 @@ Rust та inference-технологіям у нас залишатимутьс�
 - Модель не виконує інструменти сама: tool execution, мережеві credentials та
   policy залишаються за клієнтом. Будь-який майбутній server-side tool runner
   — окремий sandboxed продукт, disabled by default.
-- Кожна generation має незмінний validated config snapshot: model/family,
-  context, cache policy, quantization, sampling та constraints. Зміна CLI
-  default не може неявно змінити вже прийнятий request.
+- До Rust worker ранні фази не стандартизують runtime controls або capability
+  negotiation. API передає лише мінімальний validated generation request;
+  canonical config snapshot з'явиться разом із `moe-runtime`, де його можна
+  перевірити проти реальних Gemma/Qwen capabilities.
 
 ## Базові практики Apple
 
@@ -146,8 +147,8 @@ architecture adapter.
 | --- | --- | --- |
 | Дублікати/пошкодження long generation, незавершені SSE | #112, #70, #84, PR #107 | sequence-numbered events, lossless UTF-8 assembler, exactly-once terminal event, cross-process deterministic replay і long-generation soak fixtures |
 | Cache miss після повторного tool call | #73, PR #125 | typed cache identity: rendered-prefix digest, template/dialect ID, model/config generation; reason-coded hit/miss telemetry, а не пошук неоднозначної subsequence |
-| Tool schemas, repeated system messages, JSON output | #103, PR #26, PR #107 | нормалізація OpenAI input у API; `GenerationConstraint` capability в core/IPC; family adapter володіє dialect/parser, а не HTTP layer |
-| Реальні runtime controls і профілювання | PR #123, PR #119, PR #53 | versioned `RuntimeConfig`, immutable request snapshot, worker capabilities, stable JSON telemetry schema та budgeted instrumentation |
+| Tool schemas, repeated system messages, JSON output | #103, PR #26, PR #107 | рання нормалізація OpenAI input у API та family parser; `GenerationConstraint` capability відкладається до Rust worker |
+| Реальні runtime controls і профілювання | PR #123, PR #119, PR #53 | відкласти `RuntimeConfig` і full capabilities до Rust worker; ранні фази фіксують лише telemetry envelope та мінімальний request contract |
 | Друга/третя MoE family, 4/6/8-bit, long context | #44, #54, #102, PR #29, PR #105 | role-based quant capabilities, architecture registry, separate KV/linear state, per-family benchmark matrix і explicit resource estimate до load |
 | Installer trust, QAT/custom repos та CDN auth | #52, #109, PR #85, PR #98, PR #115 | source descriptor with trust level/pinned digest, redirect allowlist, secret redaction, receipt provenance та bounded range-transfer conformance tests |
 | Startup/worker availability | #25, PR #88, PR #126 | supervisor owns worker; readiness is socket handshake, never a guessed PID; bounded retry/backoff and typed unavailable state, without second model process |
@@ -173,7 +174,7 @@ rust/
     protocol/             версіоновані IPC frames і core <-> wire conversion
     ipc-client/           UDS client, reconnect і реалізація backend trait
     openai-api/           Axum routes, OpenAI adapter, SSE, Files і Batch
-    runtime-config/       validated immutable config snapshots і capabilities
+    runtime-config/       Rust-worker config snapshots і family capabilities
     runtime-observability/ versioned metrics/events, no-op by default
 
     moe-core/             architecture/executor traits, topology і tensor roles
@@ -223,10 +224,10 @@ turbofieldfare bin -> ipc-client, repack-core; запускає API/worker proce
 api bin            -> openai-api, ipc-client
 worker bin         -> worker, moe-runtime, gemma4-metal, qwen36-metal
 
-openai-api -> inference-core, runtime-config
-ipc-client -> protocol, inference-core, runtime-config
-worker     -> protocol, inference-core, runtime-config, runtime-observability
-protocol   -> inference-core, runtime-config
+openai-api -> inference-core
+ipc-client -> protocol, inference-core
+worker     -> protocol, inference-core, runtime-observability
+protocol   -> inference-core
 
 moe-runtime -> inference-core, moe-core, runtime-config, runtime-observability,
                gturbo-store, llm-prompt, llm-sampling, llm-kv-cache,
@@ -243,8 +244,9 @@ gemma4-repack, qwen36-repack -> repack-core, model-source, gturbo-format
 ### Правила меж crates
 
 - `inference-core` не знає про HTTP, IPC, model family, Metal або storage.
-- `runtime-config` не читає environment або CLI самостійно: parsing належить
-  binaries, а цей crate тільки canonicalizes/validates values та capabilities.
+- `runtime-config` з'являється лише разом із Rust worker. Він не читає
+  environment або CLI самостійно: parsing належить binaries, а цей crate тільки
+  canonicalizes/validates values та capabilities.
 - `runtime-observability` не керує lifecycle і має cheap disabled path; його
   event schema versioned та не містить prompts, credentials чи model bytes.
 - `moe-core` описує лише стабільні MoE concepts та traits. Нова family не може
@@ -309,8 +311,8 @@ Crates поділяються не за принципом «усе опублі
 
 | Група | Crates | Політика |
 | --- | --- | --- |
-| Публічні першими | `inference-core`, `openai-api`, `protocol`, `runtime-config`, `gturbo-format`, `moe-core` | SemVer, rustdoc, examples, changelog і conformance tests |
-| Публічні після паритету | `ipc-client`, `llm-prompt`, `llm-sampling`, `llm-kv-cache`, `metal-tensor-types`, `metal-runtime`, `moe-metal-kernels`, `gturbo-store`, `moe-expert-cache`, `model-source` | Публікувати після стабілізації transport, unsafe та I/O контрактів |
+| Публічні першими | `inference-core`, `openai-api`, `protocol`, `gturbo-format`, `moe-core` | SemVer, rustdoc, examples, changelog і conformance tests |
+| Публічні після паритету | `runtime-config`, `ipc-client`, `llm-prompt`, `llm-sampling`, `llm-kv-cache`, `metal-tensor-types`, `metal-runtime`, `moe-metal-kernels`, `gturbo-store`, `moe-expert-cache`, `model-source` | Публікувати після стабілізації runtime, transport, unsafe та I/O контрактів |
 | Model-specific | `gemma4-arch`, `gemma4-metal`, `gemma4-repack`, `qwen36-arch`, `qwen36-metal`, `qwen36-repack` | Reusable family adapters без обіцянки універсальності |
 | Внутрішня композиція | `runtime-observability`, `moe-runtime`, `worker`, `repack-core`, binaries, `test-support`, `xtask` | Спочатку `publish = false`; публікувати лише за наявності окремого use case |
 
@@ -445,7 +447,6 @@ Bootstrap може тимчасово початися з `protocol`, `openai-ap
 - OpenAI error envelopes
 - ліміт звичайного request body 1 MiB
 - request cancellation та обмежений backpressure
-- canonical `RuntimeConfig` snapshot і capability-aware validation
 - структуроване логування request і phase без prompt/secret content
 
 Mock backend з `test-support` генерує детерміновані події `prepared`, `content`,
@@ -482,8 +483,8 @@ Rust, а framing усуває неоднозначність newline.
 
 Кожен frame містить `protocol_version`, `type` і, де доречно, `request_id`.
 Generation events також містять `event_seq`; worker ніколи не перевикористовує
-його в межах request. `generate` несе canonical config snapshot та optional
-constraint descriptor, а не необроблені HTTP fields.
+його в межах request. `generate` несе тільки нормалізований мінімальний request,
+без CLI defaults, profile names або майбутнього full config snapshot.
 Початкові messages:
 
 ```text
@@ -500,13 +501,12 @@ ping / pong
 shutdown
 ```
 
-`ready` оголошує versioned capabilities worker: model ID, architecture
-ID/schema, maximum context, modality, per-role quantization, cache modes,
-constraint kinds, optional MTP, runtime-control ranges та maximum concurrency.
-Він також містить config/capability digest, щоб API не прийняв request за
-застарілими припущеннями. Протокол містить явні категорії queue-full,
-worker-busy, invalid-request, unavailable, unsupported-capability,
-constraint-violation, model-error, cancelled і internal-error.
+Ранній `ready` оголошує тільки protocol version, model ID, maximum context,
+basic tool support і maximum concurrency. Повний versioned capability descriptor
+(architecture ID/schema, modality, per-role quantization, cache modes,
+constraints, MTP та runtime-control ranges) є milestone Rust worker.
+Протокол містить явні категорії queue-full, worker-busy, invalid-request,
+unavailable, model-error, cancelled і internal-error.
 
 `inference-core` залишається власником неверсіонованих доменних типів.
 `protocol` володіє лише wire frames v1 і явними conversions. Це дозволяє
@@ -517,15 +517,12 @@ reconnect і cancellation. `worker` реалізує серверний transpor
 переданий йому backend. Тому ні `openai-api`, ні `worker` не залежать від
 конкретної Gemma/Metal реалізації.
 
-`GenerationConstraint` — малий versioned descriptor (`none`, `json`,
-`tool-call` у v1), не implementation grammar. API нормалізує OpenAI request і
-перевіряє, що capability дозволена; worker/family adapter перевіряє та виконує
-конкретну grammar. Так tool choices, repeated system messages і family template
-не протікають у IPC як HTTP details.
-
-У v1 `json` і `tool-call` означають тільки затверджені bounded profiles. API
-відхиляє довільну schema як `unsupported-capability`, доки `constraint-adapter`
-не пройде окремі performance та correctness gates.
+До Rust worker JSON/tool constraints залишаються в HTTP/family parser boundary
+і не розширюють IPC v1. Разом із Rust sampler з'являється малий versioned
+`GenerationConstraint` descriptor (`none`, `json`, `tool-call`), не
+implementation grammar. Тоді API перевіряє capability, а worker/family adapter
+виконує конкретну grammar; довільна schema лишається unsupported до окремих
+performance та correctness gates.
 
 ### Межа відповідальності
 
@@ -552,9 +549,8 @@ Inference worker і вибраний architecture adapter відповідают
 - Cancellation ідемпотентний і пов'язаний із request ID.
 - `event_seq` строго монотонний; API deduplicates repeated IPC event після
   reconnect і не створює другого terminal response.
-- Capability/config digest mismatch завершується до enqueue з typed error.
-- Golden frames покривають config, constraints, unavailable worker і
-  unsupported family/quant/modality.
+- Golden frames покривають basic `ready`, unavailable worker, malformed frames
+  і restart; expanded capabilities/config/constraints додаються з Rust worker.
 
 ## Етап 3: Swift inference worker
 
@@ -583,8 +579,6 @@ launchd state або існування stale socket. Один bounded restart/r
 - Interactive і Batch робота використовують одну авторитетну worker queue.
 - Падіння worker перетворюється на контрольований HTTP `503`.
 - Перезапуск API може відновити з'єднання без завантаження другої моделі.
-- `ready` повідомляє architecture ID/schema, quantization capabilities і
-  optional features без model-specific полів у IPC envelope.
 - Регресія TTFT не перевищує 5%.
 - Decode throughput становить щонайменше 98% від in-process Swift baseline.
 - IPC memory залишається обмеженою для довгих responses і slow clients.
@@ -1001,11 +995,12 @@ non-streaming і SSE contract tests. Перед початком IPC integration
 3. перенести mock backend у `test-support`;
 4. зробити CLI тонким composition root;
 5. додати standalone example і перевірку документації для `openai-api`.
-6. додати `runtime-config` з canonical config snapshot/capability types і
-   `event_seq`/terminal-event invariants у mock contract;
+6. додати `event_seq`/terminal-event invariants у mock contract;
 7. визначити redacted telemetry envelope та cache miss reason codes, не
    додаючи ще реального IPC чи Metal instrumentation.
 
 Цей крок не змінює inference runtime, IPC integration чи наявні Swift targets.
-Після нього Phase 2 може додати transport, не ламаючи публічний API server або
+`RuntimeConfig`, profile/default semantics, architecture capabilities і
+constraint negotiation відкладені до Rust worker. Після цього етапу Phase 2
+може додати мінімальний transport, не ламаючи публічний API server або
 model-specific crates.
