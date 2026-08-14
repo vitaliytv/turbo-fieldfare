@@ -359,6 +359,7 @@ audited entries as optional evidence.
 Useful entry points:
 
 - [Local OpenAI-compatible server](docs/OPENAI_SERVER.md)
+- [Autostart the server at login](docs/AUTOSTART.md)
 - [System design](docs/SYSTEM_DESIGN.md)
 - [Benchmarks](docs/BENCHMARKS.md)
 - [The experiments that shaped TurboFieldfare](docs/OPTIMIZATION_JOURNEY.md)

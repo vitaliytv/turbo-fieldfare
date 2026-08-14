@@ -27,6 +27,9 @@ The server loads the model before opening the port. Wait for
 `TurboFieldfareServer ready`, then keep the process running while clients use
 it.
 
+To run it as a login service instead of a terminal you keep open, see
+[Autostart the server](AUTOSTART.md).
+
 Check the server from another terminal:
 
 ```bash
