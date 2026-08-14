@@ -155,11 +155,24 @@ architecture adapter.
 | Startup/worker availability | #25, PR #88, PR #126 | supervisor owns worker; readiness is socket handshake, never a guessed PID; bounded retry/backoff and typed unavailable state, without second model process |
 | Compatibility floor | #19, PR #32, PR #110, #121 | macOS 26+ only; upstream macOS 15 fallback не входить у Rust migration scope, unsupported host fail-fast до model load |
 | Remote access і external tools | #120, PR #22, PR #79, #122 | loopback default; general `--host` як окремий fail-closed security milestone; server-side tool runner поза scope |
-| Files/Batch, multi-turn, media | PR #57, #74, #51, #11, #18, #9 | durable job state and prompt history contracts belong above inference; media is a future capability with bounded `MediaRef`, never an untyped HTTP blob passed to runtime |
+| Files/Batch, multi-turn, media | PR #57, #74, #51, #11, #18, #9 | durable job state and prompt history contracts belong above inference; migration remains text-only; future media is a separately designed bounded `MediaRef`, never an untyped HTTP blob passed to runtime |
 
 UI-only PRs (#91, #99, #114, #68, #15) і app packaging issues (#48, #86,
 #104) не змінюють Rust terminal/MoE boundaries. Їх можна переосмислити після
 terminal-only migration як незалежні clients над OpenAI API.
+
+### Рішення щодо media/vision
+
+Міграція до Rust/MoE залишається **text-only**. Підтримка зображень не є
+неявним розширенням OpenAI DTO або IPC, а окремою майбутньою capability після
+появи VLM-family, її memory model і benchmark-профілю.
+
+Тоді API може прийняти лише bounded `MediaRef`: opaque ID, MIME type,
+контрольні limits для bytes і dimensions, checksum, lifetime/ownership та
+явно оголошену modality capability архітектури. Base64 або інші binary blobs
+не переносяться в IPC, tokenizer чи Metal runtime. Це зберігає сьогоднішній
+text inference contract малим і не прив'язує MoE runtime до транспорту або
+сховища media.
 
 ## Цільовий Cargo workspace
 
