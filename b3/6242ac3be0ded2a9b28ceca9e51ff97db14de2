@@ -1,0 +1,19 @@
+Sources/TurboFieldfareServer/Command/main.swift
+  s_06fd6ef6a06569::t_f33e40c06ac03e 28-37
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "b36242ac3be0ded2a9b28ceca9e51ff97db14de2",
+  "prompts": {},
+  "sessions": {
+    "s_06fd6ef6a06569": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "5756e7f3-2865-4e97-845a-fbf290b4cead",
+        "model": "claude-opus-5"
+      },
+      "human_author": "vitaliytv <v@nitra.ai>"
+    }
+  }
+}
