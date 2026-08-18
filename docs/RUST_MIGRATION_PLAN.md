@@ -188,6 +188,8 @@ rust/
     protocol/             версіоновані IPC frames і core <-> wire conversion
     ipc-client/           UDS client, reconnect і реалізація backend trait
     openai-api/           Axum routes, OpenAI adapter, SSE, Files і Batch
+    job-store/            storage traits, IDs, state transitions, expiry policy
+    job-store-sqlite/     локальна durable SQLite реалізація job-store
     runtime-config/       Rust-worker config snapshots і family capabilities
     runtime-observability/ versioned metrics/events, no-op by default
 
@@ -238,7 +240,8 @@ turbofieldfare bin -> ipc-client, repack-core; запускає API/worker proce
 api bin            -> openai-api, ipc-client
 worker bin         -> worker, moe-runtime, gemma4-metal, qwen36-metal
 
-openai-api -> inference-core
+openai-api -> inference-core, job-store
+job-store-sqlite -> job-store
 ipc-client -> protocol, inference-core
 worker     -> protocol, inference-core, runtime-observability
 protocol   -> inference-core
@@ -268,6 +271,10 @@ gemma4-repack, qwen36-repack -> repack-core, model-source, gturbo-format
 - `protocol` містить лише versioned wire contract і conversion; він не містить
   Axum/OpenAI/Swift/Metal types і не є власником бізнес-логіки.
 - `openai-api` залежить від trait, а не від family або Metal implementation.
+- `job-store` містить тільки versioned metadata, ownership, idempotency,
+  state transitions, JSONL references і expiry. `job-store-sqlite` — перший
+  terminal-first durable backend; він не зберігає model weights, KV cache,
+  logits або runtime payloads і не є залежністю worker.
 - `ipc-client` є окремою реалізацією backend trait; HTTP crate не знає, чи
   backend локальний, IPC або тестовий.
 - `gturbo-format` не виконує network чи Metal I/O; `gturbo-store` не знає про
@@ -638,9 +645,12 @@ Batch надсилає звичайні generation requests через IPC і н
 авторитетний worker лишається single-active-generation, доки окремий benchmark
 не доведе безпечний інший режим.
 
-Files, Batch і conversation history зберігаються над IPC у versioned durable
-store з ownership/expiry. Runtime отримує тільки нормалізований request. Media
-не входить у цей етап: майбутній `MediaRef` матиме ID, MIME, dimensions/bytes
+Files, Batch і conversation history зберігаються над IPC через малий
+versioned `job-store` contract з ownership, idempotency і expiry.
+`job-store-sqlite` є його першою terminal-first durable реалізацією: вона
+забезпечує atomic state transitions і restart-safe metadata, але не стає
+залежністю worker. Runtime отримує тільки нормалізований request. Media не
+входить у цей етап: майбутній `MediaRef` матиме ID, MIME, dimensions/bytes
 limit і explicit architecture capability, а не передаватиме довільні binary
 blobs у tokenizer або Metal layer.
 
@@ -648,6 +658,8 @@ blobs у tokenizer або Metal layer.
 
 - Повний black-box HTTP contract suite проходить із Rust.
 - Batch status transitions і result/error JSONL збігаються.
+- Restart API не втрачає Files/Batch metadata, ownership, expiry або
+  idempotent job result; це перевіряється проти SQLite backend.
 - Cancellation правильно доходить до queued та active work.
 - Семантика server restart явно визначена й протестована.
 - Job transitions і output/error JSONL є idempotent за request/job IDs після
