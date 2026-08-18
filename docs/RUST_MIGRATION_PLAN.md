@@ -290,8 +290,10 @@ gemma4-repack, qwen36-repack -> repack-core, model-source, gturbo-format
 - Data root не має exclusive instance lock: кілька processes можуть звертатися
   до нього. `job-store-sqlite` мусить серіалізувати state transitions через
   SQLite transactions, а `artifact-store-fs` — через унікальний staging і
-  atomic publish. Це не робить supervisor/worker спільними: кожен `serve`
-  лишається окремим process tree зі своїм endpoint lifecycle.
+  atomic publish. Підтримувана operational topology — рівно один `serve`
+  instance на data root; паралельні instances не блокуються, але не мають
+  гарантій для endpoint, worker, queue або performance і не отримують
+  спеціальної координації чи global generation lease.
 - `RetentionPolicy` задає automatic TTL окремо для input files, Batch
   output/error та conversation history. Expired resource перестає бути
   доступним до physical GC; explicit delete є idempotent і може звільнити
@@ -632,7 +634,9 @@ launchd state або існування stale socket. Один bounded restart/r
 processes, але лишається однією командою для оператора. API restart не
 перезапускає worker/model; supervisor restart завершує лише процеси, які він
 створив. `launchd` не є runtime dependency або source of truth для Rust
-terminal product.
+terminal product. Підтримується один такий process tree на data root; другий
+не блокується, але є непідтримуваним і не ділить worker, socket, queue чи model
+з першим.
 
 ### Критерій завершення
 
