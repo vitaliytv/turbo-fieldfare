@@ -287,6 +287,11 @@ gemma4-repack, qwen36-repack -> repack-core, model-source, gturbo-format
   `./.turbofieldfare/` містить SQLite metadata і managed artifacts. Запуск із
   іншої working directory навмисно створює незалежний local instance; macOS
   Application Support і обов'язковий `--data-dir` не входять у першу версію.
+- Data root не має exclusive instance lock: кілька processes можуть звертатися
+  до нього. `job-store-sqlite` мусить серіалізувати state transitions через
+  SQLite transactions, а `artifact-store-fs` — через унікальний staging і
+  atomic publish. Це не робить supervisor/worker спільними: кожен `serve`
+  лишається окремим process tree зі своїм endpoint lifecycle.
 - `RetentionPolicy` задає automatic TTL окремо для input files, Batch
   output/error та conversation history. Expired resource перестає бути
   доступним до physical GC; explicit delete є idempotent і може звільнити
