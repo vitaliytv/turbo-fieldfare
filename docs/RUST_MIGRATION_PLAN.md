@@ -190,6 +190,8 @@ rust/
     openai-api/           Axum routes, OpenAI adapter, SSE, Files і Batch
     job-store/            storage traits, IDs, state transitions, expiry policy
     job-store-sqlite/     локальна durable SQLite реалізація job-store
+    artifact-store/       content-addressed artifact trait і retention contract
+    artifact-store-fs/    managed data directory, hashes і atomic publication
     runtime-config/       Rust-worker config snapshots і family capabilities
     runtime-observability/ versioned metrics/events, no-op by default
 
@@ -242,6 +244,7 @@ worker bin         -> worker, moe-runtime, gemma4-metal, qwen36-metal
 
 openai-api -> inference-core, job-store
 job-store-sqlite -> job-store
+artifact-store-fs -> artifact-store
 ipc-client -> protocol, inference-core
 worker     -> protocol, inference-core, runtime-observability
 protocol   -> inference-core
@@ -275,6 +278,11 @@ gemma4-repack, qwen36-repack -> repack-core, model-source, gturbo-format
   state transitions, JSONL references і expiry. `job-store-sqlite` — перший
   terminal-first durable backend; він не зберігає model weights, KV cache,
   logits або runtime payloads і не є залежністю worker.
+- `artifact-store` зберігає тільки opaque content-addressed file/JSONL bytes.
+  `artifact-store-fs` пише їх у managed data directory через private staging,
+  hash verification, `fsync` і atomic rename; SQLite зберігає лише reference,
+  ownership та lifecycle metadata. GC прибирає orphaned або expired artifacts
+  лише після узгодження з transactional job state.
 - `ipc-client` є окремою реалізацією backend trait; HTTP crate не знає, чи
   backend локальний, IPC або тестовий.
 - `gturbo-format` не виконує network чи Metal I/O; `gturbo-store` не знає про
@@ -649,10 +657,14 @@ Files, Batch і conversation history зберігаються над IPC чер�
 versioned `job-store` contract з ownership, idempotency і expiry.
 `job-store-sqlite` є його першою terminal-first durable реалізацією: вона
 забезпечує atomic state transitions і restart-safe metadata, але не стає
-залежністю worker. Runtime отримує тільки нормалізований request. Media не
-входить у цей етап: майбутній `MediaRef` матиме ID, MIME, dimensions/bytes
-limit і explicit architecture capability, а не передаватиме довільні binary
-blobs у tokenizer або Metal layer.
+залежністю worker. Самі upload, output і error JSONL bytes належать
+`artifact-store-fs`, а не SQLite BLOB: managed data directory використовує
+private staging, hash verification, `fsync` та atomic rename перед публікацією
+content-addressed reference. Cleanup видаляє лише artifacts, які SQLite вже
+позначив expired/orphaned. Runtime отримує тільки нормалізований request.
+Media не входить у цей етап: майбутній `MediaRef` матиме ID, MIME,
+dimensions/bytes limit і explicit architecture capability, а не передаватиме
+довільні binary blobs у tokenizer або Metal layer.
 
 ### Критерій завершення
 
@@ -660,6 +672,8 @@ blobs у tokenizer або Metal layer.
 - Batch status transitions і result/error JSONL збігаються.
 - Restart API не втрачає Files/Batch metadata, ownership, expiry або
   idempotent job result; це перевіряється проти SQLite backend.
+- Interrupted upload або output publish не робить частковий artifact видимим;
+  restart/GC safely прибирає staging і підтверджені orphaned files.
 - Cancellation правильно доходить до queued та active work.
 - Семантика server restart явно визначена й протестована.
 - Job transitions і output/error JSONL є idempotent за request/job IDs після
