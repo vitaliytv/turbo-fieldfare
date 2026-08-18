@@ -283,6 +283,11 @@ gemma4-repack, qwen36-repack -> repack-core, model-source, gturbo-format
   hash verification, `fsync` і atomic rename; SQLite зберігає лише reference
   та global lifecycle metadata. GC прибирає orphaned або expired artifacts
   лише після узгодження з transactional job state.
+- `RetentionPolicy` задає automatic TTL окремо для input files, Batch
+  output/error та conversation history. Expired resource перестає бути
+  доступним до physical GC; explicit delete є idempotent і може звільнити
+  ресурс раніше. Конкретні default durations — продуктний параметр, який
+  фіксується разом із Files/Batch API.
 - `ipc-client` є окремою реалізацією backend trait; HTTP crate не знає, чи
   backend локальний, IPC або тестовий.
 - `gturbo-format` не виконує network чи Metal I/O; `gturbo-store` не знає про
@@ -663,7 +668,9 @@ expiry. У першій версії немає namespace за principal: loopba
 `artifact-store-fs`, а не SQLite BLOB: managed data directory використовує
 private staging, hash verification, `fsync` та atomic rename перед публікацією
 content-addressed reference. Cleanup видаляє лише artifacts, які SQLite вже
-позначив expired/orphaned. Runtime отримує тільки нормалізований request.
+позначив expired/orphaned. Automatic TTL і explicit idempotent delete
+визначають retention; expiry прибирає ресурс з API до фактичного GC. Runtime
+отримує тільки нормалізований request.
 Media не входить у цей етап: майбутній `MediaRef` матиме ID, MIME,
 dimensions/bytes limit і explicit architecture capability, а не передаватиме
 довільні binary blobs у tokenizer або Metal layer.
@@ -676,6 +683,8 @@ dimensions/bytes limit і explicit architecture capability, а не переда
   idempotent job result; це перевіряється проти SQLite backend.
 - Interrupted upload або output publish не робить частковий artifact видимим;
   restart/GC safely прибирає staging і підтверджені orphaned files.
+- TTL expiry ховає ресурс від API до physical GC, а manual delete та повторний
+  delete є безпечними й idempotent.
 - Cancellation правильно доходить до queued та active work.
 - Семантика server restart явно визначена й протестована.
 - Job transitions і output/error JSONL є idempotent за request/job IDs після
