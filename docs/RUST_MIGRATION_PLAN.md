@@ -283,6 +283,10 @@ gemma4-repack, qwen36-repack -> repack-core, model-source, gturbo-format
   hash verification, `fsync` і atomic rename; SQLite зберігає лише reference
   та global lifecycle metadata. GC прибирає orphaned або expired artifacts
   лише після узгодження з transactional job state.
+- Default data root є відносним до current working directory:
+  `./.turbofieldfare/` містить SQLite metadata і managed artifacts. Запуск із
+  іншої working directory навмисно створює незалежний local instance; macOS
+  Application Support і обов'язковий `--data-dir` не входять у першу версію.
 - `RetentionPolicy` задає automatic TTL окремо для input files, Batch
   output/error та conversation history. Expired resource перестає бути
   доступним до physical GC; explicit delete є idempotent і може звільнити
@@ -670,7 +674,8 @@ private staging, hash verification, `fsync` та atomic rename перед пуб
 content-addressed reference. Cleanup видаляє лише artifacts, які SQLite вже
 позначив expired/orphaned. Automatic TTL і explicit idempotent delete
 визначають retention; expiry прибирає ресурс з API до фактичного GC. Runtime
-отримує тільки нормалізований request.
+отримує тільки нормалізований request. Default data root —
+`./.turbofieldfare/` відносно current working directory.
 Media не входить у цей етап: майбутній `MediaRef` матиме ID, MIME,
 dimensions/bytes limit і explicit architecture capability, а не передаватиме
 довільні binary blobs у tokenizer або Metal layer.
