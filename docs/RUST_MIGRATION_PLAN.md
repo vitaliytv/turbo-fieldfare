@@ -274,14 +274,14 @@ gemma4-repack, qwen36-repack -> repack-core, model-source, gturbo-format
 - `protocol` містить лише versioned wire contract і conversion; він не містить
   Axum/OpenAI/Swift/Metal types і не є власником бізнес-логіки.
 - `openai-api` залежить від trait, а не від family або Metal implementation.
-- `job-store` містить тільки versioned metadata, ownership, idempotency,
-  state transitions, JSONL references і expiry. `job-store-sqlite` — перший
-  terminal-first durable backend; він не зберігає model weights, KV cache,
-  logits або runtime payloads і не є залежністю worker.
+- `job-store` містить тільки versioned metadata, global-namespace lifecycle,
+  idempotency, state transitions, JSONL references і expiry.
+  `job-store-sqlite` — перший terminal-first durable backend; він не зберігає
+  model weights, KV cache, logits або runtime payloads і не є залежністю worker.
 - `artifact-store` зберігає тільки opaque content-addressed file/JSONL bytes.
   `artifact-store-fs` пише їх у managed data directory через private staging,
-  hash verification, `fsync` і atomic rename; SQLite зберігає лише reference,
-  ownership та lifecycle metadata. GC прибирає orphaned або expired artifacts
+  hash verification, `fsync` і atomic rename; SQLite зберігає лише reference
+  та global lifecycle metadata. GC прибирає orphaned або expired artifacts
   лише після узгодження з transactional job state.
 - `ipc-client` є окремою реалізацією backend trait; HTTP crate не знає, чи
   backend локальний, IPC або тестовий.
@@ -654,7 +654,9 @@ Batch надсилає звичайні generation requests через IPC і н
 не доведе безпечний інший режим.
 
 Files, Batch і conversation history зберігаються над IPC через малий
-versioned `job-store` contract з ownership, idempotency і expiry.
+versioned `job-store` contract у спільному global namespace з idempotency і
+expiry. У першій версії немає namespace за principal: loopback та всі
+автентифіковані remote keys бачать один набір ресурсів.
 `job-store-sqlite` є його першою terminal-first durable реалізацією: вона
 забезпечує atomic state transitions і restart-safe metadata, але не стає
 залежністю worker. Самі upload, output і error JSONL bytes належать
@@ -670,7 +672,7 @@ dimensions/bytes limit і explicit architecture capability, а не переда
 
 - Повний black-box HTTP contract suite проходить із Rust.
 - Batch status transitions і result/error JSONL збігаються.
-- Restart API не втрачає Files/Batch metadata, ownership, expiry або
+- Restart API не втрачає Files/Batch metadata, global lifecycle, expiry або
   idempotent job result; це перевіряється проти SQLite backend.
 - Interrupted upload або output publish не робить частковий artifact видимим;
   restart/GC safely прибирає staging і підтверджені orphaned files.
@@ -1000,6 +1002,9 @@ runtime. Інші проєкти можуть зібрати власний serv
 - remote mode має TLS server certificate/key і static Bearer API keys зі
   hashed key file, bounded request/connection admission, rate limits, audit
   events без prompt/secret content і documented credential rotation;
+- Bearer authentication у першій remote версії захищає доступ до одного
+  спільного Files/Batch/history namespace, а не створює ізоляцію між keys;
+  per-principal authorization є окремим майбутнім security/product decision;
 - TLS і API keys не потрібні та не застосовуються до loopback mode;
 - `/health` має окрему, навмисно визначену policy; інші OpenAI routes не
   допускають anonymous access;
