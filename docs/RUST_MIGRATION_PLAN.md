@@ -286,8 +286,8 @@ gemma4-repack, qwen36-repack -> repack-core, model-source, gturbo-format
 - `RetentionPolicy` задає automatic TTL окремо для input files, Batch
   output/error та conversation history. Expired resource перестає бути
   доступним до physical GC; explicit delete є idempotent і може звільнити
-  ресурс раніше. Конкретні default durations — продуктний параметр, який
-  фіксується разом із Files/Batch API.
+  ресурс раніше. Економні defaults: input files — 1 день, Batch output/error
+  — 7 днів, conversation history — 7 днів. Їх документує Files/Batch API.
 - `ipc-client` є окремою реалізацією backend trait; HTTP crate не знає, чи
   backend локальний, IPC або тестовий.
 - `gturbo-format` не виконує network чи Metal I/O; `gturbo-store` не знає про
