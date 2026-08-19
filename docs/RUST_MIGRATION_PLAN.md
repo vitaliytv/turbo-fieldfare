@@ -676,7 +676,7 @@ admission, а не generation parallelism. Більше значення зме�
 
 - multipart file upload із явним лімітом 200 MiB
 - file list, status, content і delete
-- JSONL validation
+- streaming JSONL syntax і required-field validation під час upload
 - Batch create, list, status, cancel, expiry і pagination
 - output та error JSONL files
 - поточні metadata і compatibility limits
@@ -709,6 +709,12 @@ queue slot; output/error JSONL є append-only artifacts, що звіряютьс
 persisted record state після restart. Так queue залишається bounded незалежно
 від розміру Batch.
 
+Upload однопрохідно перевіряє JSONL syntax, UTF-8, line boundaries та
+мінімальні required fields для Batch record до atomic publish artifact. Це не
+виконує family/model-dependent validation: endpoint support, prompt dialect,
+context limit і generation policy перевіряються dispatcher перед reservation
+конкретного рядка та потрапляють у його output/error record.
+
 `DELETE /v1/files/{id}` робить logical delete input file і в тій самій
 transaction позначає всі залежні non-terminal Batch jobs `cancelling`.
 Dispatcher доставляє cancellation worker; input bytes утримуються внутрішнім
@@ -727,6 +733,9 @@ dimensions/bytes limit і explicit architecture capability, а не переда
 - Large Batch не розгортається в RAM: input/output/error є лише filesystem
   artifacts, а SQLite містить тільки metadata/cursor; restart не дублює рядок
   або output record.
+- Invalid JSONL syntax або missing required fields відхиляються до publish;
+  model/family-dependent semantic failures оформлюються per-record під час
+  dispatch без пошкодження решти Batch.
 - Restart API не втрачає Files/Batch metadata, global lifecycle, expiry або
   idempotent job result; це перевіряється проти SQLite backend.
 - Interrupted upload або output publish не робить частковий artifact видимим;
