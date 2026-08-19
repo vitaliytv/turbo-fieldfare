@@ -638,12 +638,18 @@ terminal product. Підтримується один такий process tree н
 не блокується, але є непідтримуваним і не ділить worker, socket, queue чи model
 з першим.
 
+У підтримуваному instance worker має одну strict FIFO queue для interactive і
+Batch generation requests. Admission order не залежить від типу клієнта або
+job; priority, aging і GPU micro-batching не входять у parity scope та можуть
+з'явитися лише після окремого benchmark і lifecycle design.
+
 ### Критерій завершення
 
 - Rust API разом зі Swift worker проходить HTTP contract suite старого Swift
   server.
 - Text, Unicode, tool calls, finish reasons, errors і usage збігаються.
 - Interactive і Batch робота використовують одну авторитетну worker queue.
+- Queue order для interactive і Batch є strict FIFO та покривається fixtures.
 - Падіння worker перетворюється на контрольований HTTP `503`.
 - Перезапуск API може відновити з'єднання без завантаження другої моделі.
 - Регресія TTFT не перевищує 5%.
