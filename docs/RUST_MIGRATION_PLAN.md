@@ -685,6 +685,14 @@ content-addressed reference. Cleanup видаляє лише artifacts, які S
 визначають retention; expiry прибирає ресурс з API до фактичного GC. Runtime
 отримує тільки нормалізований request. Default data root —
 `./.turbofieldfare/` відносно current working directory.
+
+`DELETE /v1/files/{id}` робить logical delete input file і в тій самій
+transaction позначає всі залежні non-terminal Batch jobs `cancelling`.
+Dispatcher доставляє cancellation worker; input bytes утримуються внутрішнім
+reference до terminal state кожного job, після чого GC може їх прибрати. Це не
+видаляє вже створені output/error artifacts: для них продовжує діяти звичайний
+retention policy. Повторний delete та повторна доставка cancellation є
+idempotent.
 Media не входить у цей етап: майбутній `MediaRef` матиме ID, MIME,
 dimensions/bytes limit і explicit architecture capability, а не передаватиме
 довільні binary blobs у tokenizer або Metal layer.
@@ -699,6 +707,9 @@ dimensions/bytes limit і explicit architecture capability, а не переда
   restart/GC safely прибирає staging і підтверджені orphaned files.
 - TTL expiry ховає ресурс від API до physical GC, а manual delete та повторний
   delete є безпечними й idempotent.
+- Delete input file atomically переводить усі залежні non-terminal Batch jobs
+  у `cancelling`, доставляє worker cancellation і не прибирає їхні input bytes
+  до terminal states; already-produced output/error лишаються доступними.
 - Cancellation правильно доходить до queued та active work.
 - Семантика server restart явно визначена й протестована.
 - Job transitions і output/error JSONL є idempotent за request/job IDs після
