@@ -242,7 +242,7 @@ turbofieldfare bin -> ipc-client, repack-core; запускає API/worker proce
 api bin            -> openai-api, ipc-client
 worker bin         -> worker, moe-runtime, gemma4-metal, qwen36-metal
 
-openai-api -> inference-core, job-store
+openai-api -> inference-core, job-store, artifact-store
 job-store-sqlite -> job-store
 artifact-store-fs -> artifact-store
 ipc-client -> protocol, inference-core
@@ -701,6 +701,14 @@ content-addressed reference. Cleanup видаляє лише artifacts, які S
 отримує тільки нормалізований request. Default data root —
 `./.turbofieldfare/` відносно current working directory.
 
+Large Batch не розгортається в RAM або worker queue. Input JSONL лишається
+artifact file; SQLite зберігає тільки `BatchCursor` (artifact digest,
+next-line/byte offset, counters, status і idempotency state). Dispatcher
+резервує наступний валідний рядок transactionally та подає його лише коли є
+queue slot; output/error JSONL є append-only artifacts, що звіряються з
+persisted record state після restart. Так queue залишається bounded незалежно
+від розміру Batch.
+
 `DELETE /v1/files/{id}` робить logical delete input file і в тій самій
 transaction позначає всі залежні non-terminal Batch jobs `cancelling`.
 Dispatcher доставляє cancellation worker; input bytes утримуються внутрішнім
@@ -716,6 +724,9 @@ dimensions/bytes limit і explicit architecture capability, а не переда
 
 - Повний black-box HTTP contract suite проходить із Rust.
 - Batch status transitions і result/error JSONL збігаються.
+- Large Batch не розгортається в RAM: input/output/error є лише filesystem
+  artifacts, а SQLite містить тільки metadata/cursor; restart не дублює рядок
+  або output record.
 - Restart API не втрачає Files/Batch metadata, global lifecycle, expiry або
   idempotent job result; це перевіряється проти SQLite backend.
 - Interrupted upload або output publish не робить частковий artifact видимим;
