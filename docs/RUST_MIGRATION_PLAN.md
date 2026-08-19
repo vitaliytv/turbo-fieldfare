@@ -645,9 +645,10 @@ job; priority, aging і GPU micro-batching не входять у parity scope �
 
 Admission є bounded за кількістю requests і safe request-size estimate.
 Переповнення не утримує HTTP connection: API повертає typed `queue_full`
-(HTTP 429) з documented retry hint, не створюючи worker job. Точний default
-capacity лишається окремим parity decision; `--queue-limit` змінює admission,
-а не generation parallelism.
+(HTTP 429) з documented retry hint, не створюючи worker job. Default capacity
+— одна active generation і до 16 queued requests; `--queue-limit` змінює
+admission, а не generation parallelism. Більше значення зменшує 429, але може
+збільшити wait time і memory pressure.
 
 ### Критерій завершення
 
