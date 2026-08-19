@@ -643,6 +643,12 @@ Batch generation requests. Admission order не залежить від типу
 job; priority, aging і GPU micro-batching не входять у parity scope та можуть
 з'явитися лише після окремого benchmark і lifecycle design.
 
+Admission є bounded за кількістю requests і safe request-size estimate.
+Переповнення не утримує HTTP connection: API повертає typed `queue_full`
+(HTTP 429) з documented retry hint, не створюючи worker job. Точний default
+capacity лишається окремим parity decision; `--queue-limit` змінює admission,
+а не generation parallelism.
+
 ### Критерій завершення
 
 - Rust API разом зі Swift worker проходить HTTP contract suite старого Swift
@@ -650,6 +656,8 @@ job; priority, aging і GPU micro-batching не входять у parity scope �
 - Text, Unicode, tool calls, finish reasons, errors і usage збігаються.
 - Interactive і Batch робота використовують одну авторитетну worker queue.
 - Queue order для interactive і Batch є strict FIFO та покривається fixtures.
+- Queue overflow повертає `queue_full`/HTTP 429 без прийняття worker job або
+  утримання HTTP connection.
 - Падіння worker перетворюється на контрольований HTTP `503`.
 - Перезапуск API може відновити з'єднання без завантаження другої моделі.
 - Регресія TTFT не перевищує 5%.
