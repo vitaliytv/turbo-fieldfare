@@ -715,6 +715,12 @@ Upload однопрохідно перевіряє JSONL syntax, UTF-8, line bou
 context limit і generation policy перевіряються dispatcher перед reservation
 конкретного рядка та потрапляють у його output/error record.
 
+Model/family-dependent semantic failure одного record не зупиняє Batch.
+Dispatcher persistently завершує цей record як failed, додає structured entry
+до error JSONL, оновлює counters і продовжує cursor з наступним рядком.
+Загальна terminal-status policy для Batch з частковими failures визначається
+окремо; жоден record не пропускається тихо.
+
 `DELETE /v1/files/{id}` робить logical delete input file і в тій самій
 transaction позначає всі залежні non-terminal Batch jobs `cancelling`.
 Dispatcher доставляє cancellation worker; input bytes утримуються внутрішнім
@@ -736,6 +742,8 @@ dimensions/bytes limit і explicit architecture capability, а не переда
 - Invalid JSONL syntax або missing required fields відхиляються до publish;
   model/family-dependent semantic failures оформлюються per-record під час
   dispatch без пошкодження решти Batch.
+- Semantic failure одного record створює structured error JSONL entry й
+  durable failed counter; наступні records продовжують виконуватися.
 - Restart API не втрачає Files/Batch metadata, global lifecycle, expiry або
   idempotent job result; це перевіряється проти SQLite backend.
 - Interrupted upload або output publish не робить частковий artifact видимим;
