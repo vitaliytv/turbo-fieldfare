@@ -729,6 +729,13 @@ reference до terminal state кожного job, після чого GC мож�
 видаляє вже створені output/error artifacts: для них продовжує діяти звичайний
 retention policy. Повторний delete та повторна доставка cancellation є
 idempotent.
+
+`POST /v1/batches/{id}/cancel` має негайну семантику: transaction переводить
+Batch у `cancelling`, знімає його queued records з admission і за потреби
+надсилає cancellation active record у worker. Після terminal acknowledgement
+Batch стає `cancelled`; уже durable output/error artifacts і counters
+зберігаються до свого TTL. Повторний cancel не змінює результат і є
+idempotent.
 Media не входить у цей етап: майбутній `MediaRef` матиме ID, MIME,
 dimensions/bytes limit і explicit architecture capability, а не передаватиме
 довільні binary blobs у tokenizer або Metal layer.
@@ -756,6 +763,9 @@ dimensions/bytes limit і explicit architecture capability, а не переда
 - Delete input file atomically переводить усі залежні non-terminal Batch jobs
   у `cancelling`, доставляє worker cancellation і не прибирає їхні input bytes
   до terminal states; already-produced output/error лишаються доступними.
+- Batch cancel не dispatch-ить нових records, знімає queued records, передає
+  cancellation active record і стає `cancelled` після terminal acknowledgement;
+  existing output/error/counters зберігаються.
 - Cancellation правильно доходить до queued та active work.
 - Семантика server restart явно визначена й протестована.
 - Job transitions і output/error JSONL є idempotent за request/job IDs після
