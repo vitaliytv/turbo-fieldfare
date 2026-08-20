@@ -681,6 +681,13 @@ admission, а не generation parallelism. Більше значення зме�
 - output та error JSONL files
 - поточні metadata і compatibility limits
 
+Підтримується лише `completion_window=24h`; він фіксується під час Batch create
+разом із deadline. Після deadline dispatcher припиняє новий dispatch, прибирає
+queued records і надсилає cancellation active record. Після terminal
+acknowledgement Batch стає `expired`; already-produced output/error і counters
+лишаються доступними за звичайним retention policy. Довільні completion windows
+не входять у першу OpenAI-compatible surface.
+
 Batch надсилає звичайні generation requests через IPC і ніколи не обходить
 межу серіалізації worker. Це OpenAI Batch API, а не GPU micro-batching:
 авторитетний worker лишається single-active-generation, доки окремий benchmark
@@ -744,6 +751,9 @@ dimensions/bytes limit і explicit architecture capability, а не переда
 
 - Повний black-box HTTP contract suite проходить із Rust.
 - Batch status transitions і result/error JSONL збігаються.
+- Batch приймає лише `completion_window=24h`; expiry припиняє dispatch,
+  скасовує queued/active work і переходить у `expired`, не втрачаючи durable
+  output/error records.
 - Large Batch не розгортається в RAM: input/output/error є лише filesystem
   artifacts, а SQLite містить тільки metadata/cursor; restart не дублює рядок
   або output record.
