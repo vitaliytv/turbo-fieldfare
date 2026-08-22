@@ -955,6 +955,13 @@ HTTP-відповіді має `response=null` і `error={code,message}`. Усп
 envelopes йдуть у output JSONL, terminal failures — у error JSONL; у кожному
 line немає TurboFieldfare-specific полів.
 
+Успішний Chat Completion `response.body` завжди містить exact
+tokenizer-derived `usage.prompt_tokens`, `usage.completion_tokens` і
+`usage.total_tokens`; `total_tokens` є їхньою сумою, а не character estimate.
+`usage.prompt_tokens_details.cached_tokens` додається лише коли worker точно
+виміряв reuse prompt/KV cache; якщо такого вимірювання немає, detail absent, а
+не synthetic `0`.
+
 Upload однопрохідно перевіряє JSONL syntax, UTF-8, line boundaries та
 мінімальні required fields для Batch record до atomic publish artifact. Це не
 виконує family-dependent validation: prompt dialect, context limit і generation
@@ -1134,6 +1141,9 @@ dimensions/bytes limit і explicit architecture capability, а не переда
 - Кожен result line є canonical `{id,custom_id,response,error}` без локальних
   полів: HTTP result має `response.status_code/request_id/body` та `error=null`,
   а non-HTTP failure — `response=null` і `error.code/message`.
+- Успішний Chat Completion body має exact tokenizer-derived
+  `usage.prompt_tokens`, `completion_tokens`, `total_tokens`; cached-token
+  detail присутній лише за точного worker measurement, ніколи як estimate.
 - Semantic failure одного record створює canonical error JSONL envelope й
   durable failed counter; наступні records продовжують виконуватися.
 - Batch із terminal records і `request_counts.failed > 0` має статус
