@@ -688,6 +688,12 @@ acknowledgement Batch стає `expired`; already-produced output/error і count
 лишаються доступними за звичайним retention policy. Довільні completion windows
 не входять у першу OpenAI-compatible surface.
 
+Batch `metadata` підтримується повністю: optional map до 16 string pairs,
+ключ до 64 characters і value до 512 characters. Валідація виконується на
+create, SQLite зберігає canonical map, а кожна Batch відповідь повертає її без
+зміни. Metadata не передається worker, не впливає на scheduler і не потрапляє
+до telemetry за замовчуванням.
+
 Strict Batch parity не додає окремої idempotency surface: `POST /v1/batches`
 завжди створює новий Batch після успішної валідації. `Idempotency-Key` та інші
 недокументовані для цього endpoint headers не впливають на create semantics і
@@ -761,6 +767,8 @@ dimensions/bytes limit і explicit architecture capability, а не переда
 - Batch приймає лише `completion_window=24h`; expiry припиняє dispatch,
   скасовує queued/active work і переходить у `expired`, не втрачаючи durable
   output/error records.
+- Batch `metadata` приймає до 16 string pairs із лімітами key/value 64/512,
+  durable зберігається та round-trips без зміни у create/retrieve/list.
 - Два валідні `POST /v1/batches` створюють два різні IDs навіть з однаковим
   `Idempotency-Key`; header не створює TurboFieldfare-specific semantics.
 - Large Batch не розгортається в RAM: input/output/error є лише filesystem
