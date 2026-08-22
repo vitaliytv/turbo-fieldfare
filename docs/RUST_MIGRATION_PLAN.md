@@ -771,6 +771,11 @@ create preflight до job ID/cursor/queue admission. Сервер не змін�
 на `false` і не запускає внутрішній stream із прихованим буферизуванням; кожен
 допустимий record має один non-streaming Chat Completion у `response.body`.
 
+Batch підтримує тільки `body.n` відсутній або exact `1`. Будь-який інший
+`n` відхиляє весь Batch у тому ж bounded create preflight до job ID/cursor/queue
+admission: сервер не serializes multiple candidates, не створює кілька output
+lines для одного `custom_id` і не приводить значення до `1` неявно.
+
 Batch Chat records повністю підтримують `tools` і `tool_choice` тією ж
 OpenAI/family validation, що interactive Chat Completions. Tool call повертається
 в `response.body` canonical result envelope як звичайний Chat Completion
@@ -910,6 +915,9 @@ dimensions/bytes limit і explicit architecture capability, а не переда
 - `body.stream=true` або будь-який `stream_options` відхиляє весь Batch до
   job ID/cursor/queue admission; Batch не coerc-ить stream і не буферизує
   прихований SSE, а повертає лише non-streaming Chat Completion envelopes.
+- Batch підтримує лише absent `body.n` або `n=1`; будь-яке інше значення
+  відхиляє весь Batch до job ID/cursor/queue admission без multiple candidates,
+  кількох output lines на `custom_id` чи неявного clamp до `1`.
 - Batch Chat records підтримують `tools` і `tool_choice` з тією ж валідацією,
   що interactive Chat; `tool_calls` round-trip у canonical `response.body`, а
   сервер/worker ніколи не виконують їх, не мають tool credentials і не
