@@ -297,12 +297,13 @@ gemma4-repack, qwen36-repack -> repack-core, model-source, gturbo-format
 - `RetentionPolicy` розділяє Files і локальну conversation history. Strict
   Files defaults: input з `purpose=batch` спливає через 30 днів, а створені
   сервером output/error з `purpose=batch_output` не мають automatic TTL і
-  зберігаються до explicit delete. Conversation history не є OpenAI Files
-  resource й лишається локальною 7-денною політикою. Expired input стає
-  недоступним до physical GC; explicit delete є idempotent і може звільнити
-  artifact раніше. Upload `expires_after` зберігає повний Files contract:
-  exact object `{ anchor: "created_at", seconds }` визначає індивідуальний
-  `expires_at` Batch input; якщо параметр відсутній, діє default 30 днів.
+  зберігаються до explicit delete. Batch create може змінити це лише через
+  `output_expires_after`. Conversation history не є OpenAI Files resource й
+  лишається локальною 7-денною політикою. Expired input стає недоступним до
+  physical GC; explicit delete є idempotent і може звільнити artifact раніше.
+  Upload `expires_after` зберігає повний Files contract: exact object
+  `{ anchor: "created_at", seconds }` визначає індивідуальний `expires_at`
+  Batch input; якщо параметр відсутній, діє default 30 днів.
 - `ipc-client` є окремою реалізацією backend trait; HTTP crate не знає, чи
   backend локальний, IPC або тестовий.
 - `gturbo-format` не виконує network чи Metal I/O; `gturbo-store` не знає про
@@ -697,8 +698,11 @@ routes. Input `batch` має strict 30-денний TTL, тоді
 conversation history не є Files artifact. Для input підтримується
 `expires_after={anchor:"created_at",seconds}`: він валідовується до artifact
 write, обчислює та повертає FileObject `expires_at`; без параметра сервер
-повертає default `created_at + 30 days`. Generated `batch_output` не приймає
-та не повертає custom expiry. `GET /v1/files` свідомо не routed і повертає
+повертає default `created_at + 30 days`. `POST /v1/batches` також приймає
+`output_expires_after={anchor:"created_at",seconds}`: `seconds` 3 600…2 592
+000 задає `expires_at` для створених output/error Files від їхнього власного
+`created_at`; відсутність поля лишає їх до explicit delete. Invalid policy
+відхиляється до job creation. `GET /v1/files` свідомо не routed і повертає
 звичайний endpoint-not-found response без розкриття shared resource namespace.
 
 `GET /v1/batches` є повною cursor-paginated surface над durable Batch jobs:
@@ -720,6 +724,14 @@ Batch `metadata` підтримується повністю: optional map до 
 create, SQLite зберігає canonical map, а кожна Batch відповідь повертає її без
 зміни. Metadata не передається worker, не впливає на scheduler і не потрапляє
 до telemetry за замовчуванням.
+
+`output_expires_after` є optional Batch-create policy для обох generated
+`batch_output` Files. Підтримується тільки exact
+`{anchor:"created_at",seconds}` з `seconds` 3 600…2 592 000; anchor прив'язаний
+до File creation, не до Batch creation. Valid policy durable зберігається з
+job і застосовується до кожного output/error artifact; malformed або
+unsupported policy відхиляє Batch до створення ID. Без параметра generated
+files не мають automatic expiry.
 
 Для strict supported-surface parity `endpoint` на Batch create може бути лише
 `/v1/chat/completions`. Будь-який інший endpoint відхиляється до створення job
@@ -820,7 +832,11 @@ dimensions/bytes limit і explicit architecture capability, а не переда
 - Files upload повністю підтримує `expires_after` з anchor `created_at` і
   `seconds`: valid policy повертає обчислений `expires_at`, а absent policy —
   default `created_at + 30 days`; malformed або unsupported policy не створює
-  artifact. Server-generated `batch_output` лишається без custom expiry.
+  artifact.
+- Batch create повністю підтримує `output_expires_after` для output/error:
+  exact anchor `created_at`, `seconds` 3 600…2 592 000 і `expires_at` кожного
+  generated File від його creation time; absent policy зберігає їх до manual
+  delete, invalid policy не створює Batch ID.
 - `GET /v1/files` не підтримується та не розкриває shared Files namespace;
   retrieve/content/delete конкретного known file ID лишаються підтриманими.
 - `GET /v1/batches` реалізує CursorPage `{object:"list",data,first_id,
