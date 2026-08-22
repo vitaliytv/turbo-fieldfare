@@ -809,6 +809,12 @@ create preflight до job ID/cursor/queue admission. API не ігнорує map
 family tokenizer validation, bounded bias values і реального застосування в
 sampler.
 
+До Rust-worker parity для history-aware logit transforms `presence_penalty` і
+`frequency_penalty` не підтримуються: присутність будь-якого з цих полів хоча
+б в одному record відхиляє весь Batch у create preflight до
+job ID/cursor/queue admission. API не ігнорує penalties; майбутня підтримка
+вимагатиме tokenizer-consistent token-history accounting у sampler.
+
 До Rust-worker logprob parity Batch не підтримує `body.logprobs` чи
 `body.top_logprobs`: присутність будь-якого з цих полів у record відхиляє весь
 Batch у create preflight до job ID/cursor/queue admission. API не ігнорує поля,
@@ -996,6 +1002,9 @@ dimensions/bytes limit і explicit architecture capability, а не переда
 - До Rust-worker tokenizer-aware logit-transform parity `logit_bias` в одному
   record відхиляє весь Batch до job ID/cursor/queue admission; сервер не
   ігнорує map і не передає неперевірені token IDs у worker.
+- До Rust-worker history-aware logit-transform parity `presence_penalty` або
+  `frequency_penalty` в одному record відхиляє весь Batch до
+  job ID/cursor/queue admission; сервер не ігнорує penalties.
 - До Rust-worker logprob parity будь-який Batch record із `logprobs` або
   `top_logprobs` відхиляє весь Batch до job ID/cursor/queue admission; сервер
   не ігнорує поля та не синтезує або частково не повертає logprobs.
