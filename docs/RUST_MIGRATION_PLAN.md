@@ -767,6 +767,10 @@ Upload однопрохідно перевіряє JSONL syntax, UTF-8, line bou
 context limit і generation policy перевіряються dispatcher перед reservation
 конкретного рядка та потрапляють у його output/error record.
 
+Один Batch input обмежений 50 000 records. Той самий streaming pass, що
+перевіряє JSONL, лічить records; 50 001-й record відхиляє весь upload до atomic
+publish, не створюючи FileObject, artifact або BatchCursor.
+
 Для підтримуваного Chat Batch кожен input record мусить мати непорожній
 `custom_id`, `method: "POST"`, `url: "/v1/chat/completions"` і JSON-object
 `body`. `custom_id` унікальний у межах input file; missing/duplicate ID,
@@ -811,6 +815,8 @@ dimensions/bytes limit і explicit architecture capability, а не переда
   server-generated output/error artifacts мають `purpose=batch_output`.
 - Batch input upload приймає лише filename `.jsonl` до 200 MB; streaming
   overflow або інший filename відхиляється до artifact publish.
+- Batch input містить не більш ніж 50 000 JSONL records; 50 001-й record
+  відхиляє upload до publish без FileObject, artifact або cursor.
 - Files upload повністю підтримує `expires_after` з anchor `created_at` і
   `seconds`: valid policy повертає обчислений `expires_at`, а absent policy —
   default `created_at + 30 days`; malformed або unsupported policy не створює
