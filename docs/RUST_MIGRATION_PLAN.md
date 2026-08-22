@@ -901,6 +901,12 @@ model/family або нездійсненний для конкретної ге�
 `json_schema` до best-effort JSON, не змінює `response_format` і не переводить
 такий випадок у Batch-wide failure.
 
+`response_format.type="json_schema"` приймається лише для schema profile, який
+active worker явно оголосив constrained-decode capability. Невалідна schema,
+profile поза підтримуваним subset або недоступність для active model/family
+завершує лише цей record typed canonical error; API не повертає best-effort JSON
+і не підміняє `json_schema` на `json_object`.
+
 Strict Batch parity не додає окремої idempotency surface: `POST /v1/batches`
 завжди створює новий Batch після успішної валідації. `Idempotency-Key` та інші
 недокументовані для цього endpoint headers не впливають на create semantics і
@@ -1090,6 +1096,10 @@ dimensions/bytes limit і explicit architecture capability, а не переда
   interactive Chat: malformed, unavailable або нездійсненний structured
   constraint створює один canonical per-record error envelope, без silent
   format downgrade чи Batch-wide failure.
+- `response_format.type="json_schema"` приймається лише для оголошеного
+  worker constrained-decode schema profile; невалідна або unavailable schema
+  дає typed canonical per-record error, без best-effort JSON чи downgrade до
+  `json_object`.
 - `body.store=false` не створює local conversation-history record для цього
   Batch record; absent/`true` використовує 7-денну history policy. Усі
   обов'язкові input/output/error artifacts та Batch metadata залишаються
