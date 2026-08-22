@@ -758,6 +758,13 @@ files не мають automatic expiry.
 з typed unsupported-endpoint error; dispatcher ніколи не приймає завідомо
 непідтримуваний Batch та не перетворює його на per-record failures.
 
+Batch є атомарно прив'язаним до active advertised model ID worker. Під час
+`POST /v1/batches` API однопрохідно preflight-сканує `body.model` усіх records
+проти цього ID; хоча б один missing або інший model відхиляє весь Batch до
+створення ID, cursor, queue admission чи worker dispatch. Це не неявна
+підстановка моделі й не per-record failure; перевірка лишається bounded та не
+розгортає JSONL у RAM.
+
 Strict Batch parity не додає окремої idempotency surface: `POST /v1/batches`
 завжди створює новий Batch після успішної валідації. `Idempotency-Key` та інші
 недокументовані для цього endpoint headers не впливають на create semantics і
@@ -803,9 +810,10 @@ line немає TurboFieldfare-specific полів.
 
 Upload однопрохідно перевіряє JSONL syntax, UTF-8, line boundaries та
 мінімальні required fields для Batch record до atomic publish artifact. Це не
-виконує family/model-dependent validation: endpoint support, prompt dialect,
-context limit і generation policy перевіряються dispatcher перед reservation
-конкретного рядка та потрапляють у його output/error record.
+виконує family-dependent validation: prompt dialect, context limit і generation
+policy перевіряються dispatcher перед reservation конкретного рядка та
+потрапляють у його output/error record. Єдиний виняток — Batch-wide exact
+`body.model` preflight під час create.
 
 Один Batch input обмежений 50 000 records. Той самий streaming pass, що
 перевіряє JSONL, лічить records; 50 001-й record відхиляє весь upload до atomic
@@ -882,6 +890,9 @@ dimensions/bytes limit і explicit architecture capability, а не переда
   failures лишаються тільки в error JSONL.
 - Batch create приймає лише `/v1/chat/completions`; інші endpoint-и відхилені
   до job creation, без cursor або worker admission.
+- Усі Batch `body.model` мусять exact збігатися з active advertised worker
+  model ID; missing або один mismatch відхиляє весь Batch до job ID/cursor/queue
+  admission, без неявної model substitution чи per-record fallback.
 - Кожен Batch JSONL record має unique non-empty `custom_id`, exact
   `POST /v1/chat/completions` і object `body`; malformed records відхилені до
   artifact publish, без server-generated IDs.
