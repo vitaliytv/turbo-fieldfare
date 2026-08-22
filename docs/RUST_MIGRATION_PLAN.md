@@ -800,6 +800,13 @@ queue admission чи worker dispatch. API не видаляє content parts, н�
 job ID/cursor/queue admission. API не зливає його з `system` і не дозволяє
 family adapter-ам неявно змінювати hierarchy інструкцій.
 
+Batch підтримує canonical history із `system`, `user`, `assistant` і `tool`
+messages тією ж validation, що interactive Chat. Validator зберігає порядок,
+вимагає unique assistant tool-call IDs і exact `tool_call_id` для кожного tool
+result; malformed або неузгоджена history завершує лише цей record canonical
+per-record error. Family adapter рендерить validated history у власний prompt
+dialect без зведення assistant/tool content до user text.
+
 Batch є artifact-oriented, а не SSE transport: `body.stream=true` або
 присутній `stream_options` в будь-якому record відхиляють весь Batch під час
 create preflight до job ID/cursor/queue admission. Сервер не змінює `stream`
@@ -1012,6 +1019,10 @@ dimensions/bytes limit і explicit architecture capability, а не переда
 - До cross-family prompt-dialect contract `developer` message в одному record
   відхиляє весь Batch до job ID/cursor/queue admission; сервер не зливає його
   з `system` і не змінює hierarchy інструкцій неявно.
+- Batch підтримує canonical `system`/`user`/`assistant`/`tool` history з тією
+  ж validation, що interactive Chat: порядок, unique assistant tool-call IDs і
+  exact tool `tool_call_id`; malformed history дає canonical per-record error,
+  а family adapter не flatten-ить її до user text.
 - `body.stream=true` або будь-який `stream_options` відхиляє весь Batch до
   job ID/cursor/queue admission; Batch не coerc-ить stream і не буферизує
   прихований SSE, а повертає лише non-streaming Chat Completion envelopes.
