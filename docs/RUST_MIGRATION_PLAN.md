@@ -518,6 +518,13 @@ worker. Рання API surface не має event buffer, `Last-Event-ID`, resume
 після disconnect generation не продовжується у background, а нове підключення
 є новим request із новим lifecycle.
 
+SSE adapter утримує лише bounded buffer між worker events і client socket. Якщо
+slow client вичерпує цю межу, API скасовує worker request і завершує stream;
+він не блокує worker FIFO, не накопичує unbounded RAM і не відкидає окремі
+tokens. Внутрішній lifecycle все одно має один cancelled terminal event, хоча
+вже повільний socket може побачити лише закриття після partial SSE. Buffer
+overflow reason потрапляє лише в redacted telemetry без prompt content.
+
 `GET /v1/models` повертає лише active ready worker model generation. Коли
 worker не ready, unavailable або не має current descriptor, endpoint повертає
 typed `503 model_unavailable`; API не показує empty list, last-known descriptor
@@ -549,6 +556,9 @@ Mock backend з `test-support` генерує детерміновані под�
 - Interactive SSE disconnect скасовує worker generation; немає event buffer,
   `Last-Event-ID`, resume або replay, а нове підключення є новим request.
 - Повільні clients не спричиняють необмежену буферизацію.
+- Slow SSE client, що переповнив bounded adapter buffer, скасовує generation;
+  worker FIFO не блокується, окремі tokens не drop-аються, а reason є лише в
+  redacted telemetry.
 - Один request має рівно один terminal event; content events мають строго
   зростаючу sequence і не повторюються після cancellation/error.
 - UTF-8 boundary tests покривають split scalar, tool JSON і heartbeats.
