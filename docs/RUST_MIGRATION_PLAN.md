@@ -679,7 +679,7 @@ admission, а не generation parallelism. Більше значення зме�
 Реалізувати решту API surface в `openai-api`:
 
 - multipart Batch file upload із strict filename `.jsonl` та лімітом 200 MB
-- file list, status, content і delete
+- file retrieve/status, content і delete; `GET /v1/files` не підтримується
 - streaming JSONL syntax і required-field validation під час upload
 - Batch create, list, status, cancel, expiry і pagination
 - output та error JSONL files
@@ -698,7 +698,8 @@ conversation history не є Files artifact. Для input підтримуєть
 `expires_after={anchor:"created_at",seconds}`: він валідовується до artifact
 write, обчислює та повертає FileObject `expires_at`; без параметра сервер
 повертає default `created_at + 30 days`. Generated `batch_output` не приймає
-та не повертає custom expiry.
+та не повертає custom expiry. `GET /v1/files` свідомо не routed і повертає
+звичайний endpoint-not-found response без розкриття shared resource namespace.
 
 Підтримується лише `completion_window=24h`; він фіксується під час Batch create
 разом із deadline. Після deadline dispatcher припиняє новий dispatch, прибирає
@@ -807,6 +808,8 @@ dimensions/bytes limit і explicit architecture capability, а не переда
   `seconds`: valid policy повертає обчислений `expires_at`, а absent policy —
   default `created_at + 30 days`; malformed або unsupported policy не створює
   artifact. Server-generated `batch_output` лишається без custom expiry.
+- `GET /v1/files` не підтримується та не розкриває shared Files namespace;
+  retrieve/content/delete конкретного known file ID лишаються підтриманими.
 - Batch create приймає лише `/v1/chat/completions`; інші endpoint-и відхилені
   до job creation, без cursor або worker admission.
 - Кожен Batch JSONL record має unique non-empty `custom_id`, exact
