@@ -678,7 +678,7 @@ admission, а не generation parallelism. Більше значення зме�
 
 Реалізувати решту API surface в `openai-api`:
 
-- multipart file upload із явним лімітом 200 MiB
+- multipart Batch file upload із strict filename `.jsonl` та лімітом 200 MB
 - file list, status, content і delete
 - streaming JSONL syntax і required-field validation під час upload
 - Batch create, list, status, cancel, expiry і pagination
@@ -687,9 +687,12 @@ admission, а не generation parallelism. Більше значення зме�
 
 Supported Files surface приймає uploads лише з `purpose=batch`. Інші purpose
 відхиляються до artifact write; сервер не створює generic Files без runtime
-semantics. Batch input FileObject зберігає `purpose=batch`, а output і error
-JSONL, створені server, мають `purpose=batch_output` і доступні через звичайні
-retrieve/content/delete routes. Input `batch` має strict 30-денний TTL, тоді
+semantics. Batch input повинен мати filename `.jsonl` і не перевищувати 200 MB:
+розмір перевіряється однопрохідно до atomic publish, а overflow не залишає
+видимого або durable artifact. Batch input FileObject зберігає
+`purpose=batch`, а output і error JSONL, створені server, мають
+`purpose=batch_output` і доступні через звичайні retrieve/content/delete
+routes. Input `batch` має strict 30-денний TTL, тоді
 як server-generated `batch_output` зберігається до explicit delete; 7-денна
 conversation history не є Files artifact. Для input підтримується
 `expires_after={anchor:"created_at",seconds}`: він валідовується до artifact
@@ -798,6 +801,8 @@ dimensions/bytes limit і explicit architecture capability, а не переда
   durable зберігається та round-trips без зміни у create/retrieve/list.
 - Files upload приймає лише `purpose=batch`; Batch input має `batch`, а
   server-generated output/error artifacts мають `purpose=batch_output`.
+- Batch input upload приймає лише filename `.jsonl` до 200 MB; streaming
+  overflow або інший filename відхиляється до artifact publish.
 - Files upload повністю підтримує `expires_after` з anchor `created_at` і
   `seconds`: valid policy повертає обчислений `expires_at`, а absent policy —
   default `created_at + 30 days`; malformed або unsupported policy не створює
