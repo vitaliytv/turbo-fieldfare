@@ -712,6 +712,17 @@ write, обчислює та повертає FileObject `expires_at`; без п
 object, що повертають create/retrieve. Pagination не додає tenant isolation:
 за прийнятим global namespace remote keys бачать той самий список jobs.
 
+`BatchStatus` є публічним durable state machine: successful flow проходить
+`validating → in_progress → finalizing → completed`; job-level failure —
+`validating → failed`; deadline — `validating|in_progress|finalizing → expired`;
+cancel — `validating|in_progress|finalizing → cancelling → cancelled`.
+`created_at` встановлюється при create, `expires_at` — його 24h deadline, а
+`in_progress_at`, `finalizing_at`, `completed_at`, `failed_at`, `expired_at`,
+`cancelling_at` та `cancelled_at` встановлюються рівно на відповідному
+transition, лише один раз і ніколи не переписуються після restart. Усі
+create/retrieve/list/cancel responses повертають ці поля з однакової
+transactional state.
+
 Підтримується лише `completion_window=24h`; він фіксується під час Batch create
 разом із deadline. Після deadline dispatcher припиняє новий dispatch, прибирає
 queued records і надсилає cancellation active record. Після terminal
@@ -854,6 +865,10 @@ dimensions/bytes limit і explicit architecture capability, а не переда
 - `GET /v1/batches` реалізує CursorPage `{object:"list",data,first_id,
   last_id,has_more}` з exact `after` та `limit` (1…100, default 20); наступна
   сторінка з `after=last_id` не пропускає та не дублює durable Batch job.
+- Batch публічно проходить only valid lifecycle transitions `validating`,
+  `in_progress`, `finalizing`, `completed`, `failed`, `expired`, `cancelling`,
+  `cancelled`; усі `*_at` timestamps встановлюються один раз на transition і
+  однаково round-trip через create/retrieve/list/cancel, включно після restart.
 - Batch create приймає лише `/v1/chat/completions`; інші endpoint-и відхилені
   до job creation, без cursor або worker admission.
 - Кожен Batch JSONL record має unique non-empty `custom_id`, exact
