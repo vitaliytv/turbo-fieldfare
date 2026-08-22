@@ -294,11 +294,13 @@ gemma4-repack, qwen36-repack -> repack-core, model-source, gturbo-format
   instance на data root; паралельні instances не блокуються, але не мають
   гарантій для endpoint, worker, queue або performance і не отримують
   спеціальної координації чи global generation lease.
-- `RetentionPolicy` задає automatic TTL окремо для input files, Batch
-  output/error та conversation history. Expired resource перестає бути
-  доступним до physical GC; explicit delete є idempotent і може звільнити
-  ресурс раніше. Економні defaults: input files — 1 день, Batch output/error
-  — 7 днів, conversation history — 7 днів. Їх документує Files/Batch API.
+- `RetentionPolicy` розділяє Files і локальну conversation history. Strict
+  Files defaults: input з `purpose=batch` спливає через 30 днів, а створені
+  сервером output/error з `purpose=batch_output` не мають automatic TTL і
+  зберігаються до explicit delete. Conversation history не є OpenAI Files
+  resource й лишається локальною 7-денною політикою. Expired input стає
+  недоступним до physical GC; explicit delete є idempotent і може звільнити
+  artifact раніше.
 - `ipc-client` є окремою реалізацією backend trait; HTTP crate не знає, чи
   backend локальний, IPC або тестовий.
 - `gturbo-format` не виконує network чи Metal I/O; `gturbo-store` не знає про
@@ -685,7 +687,9 @@ Supported Files surface приймає uploads лише з `purpose=batch`. Ін
 відхиляються до artifact write; сервер не створює generic Files без runtime
 semantics. Batch input FileObject зберігає `purpose=batch`, а output і error
 JSONL, створені server, мають `purpose=batch_output` і доступні через звичайні
-retrieve/content/delete routes.
+retrieve/content/delete routes. Input `batch` має strict 30-денний TTL, тоді
+як server-generated `batch_output` зберігається до explicit delete; 7-денна
+conversation history не є Files artifact.
 
 Підтримується лише `completion_window=24h`; він фіксується під час Batch create
 разом із deadline. Після deadline dispatcher припиняє новий dispatch, прибирає
@@ -809,8 +813,9 @@ dimensions/bytes limit і explicit architecture capability, а не переда
   idempotent job result; це перевіряється проти SQLite backend.
 - Interrupted upload або output publish не робить частковий artifact видимим;
   restart/GC safely прибирає staging і підтверджені orphaned files.
-- TTL expiry ховає ресурс від API до physical GC, а manual delete та повторний
-  delete є безпечними й idempotent.
+- Input `purpose=batch` зникає з API через 30 днів до physical GC;
+  server-generated `purpose=batch_output` не має automatic TTL і видаляється
+  лише вручну. Manual delete та повторний delete є безпечними й idempotent.
 - Delete input file atomically переводить усі залежні non-terminal Batch jobs
   у `cancelling`, доставляє worker cancellation і не прибирає їхні input bytes
   до terminal states; already-produced output/error лишаються доступними.
