@@ -788,6 +788,11 @@ Batch є атомарно прив'язаним до active advertised model ID 
 підстановка моделі й не per-record failure; перевірка лишається bounded та не
 розгортає JSONL у RAM.
 
+`POST /v1/batches` вимагає active ready worker з поточним model descriptor.
+Якщо readiness або descriptor недоступні, API повертає typed `503
+model_unavailable` до Batch ID, cursor, queue admission чи durable metadata;
+він не приймає job для відкладеної validation і не довіряє last-known model ID.
+
 Ранній Batch text-only: `body.messages` кожного record можуть містити лише
 підтримуваний text content. Один image, audio, file або інший non-text modality
 відхиляє весь Batch у тому ж streaming create preflight до job ID, cursor,
@@ -1077,6 +1082,9 @@ dimensions/bytes limit і explicit architecture capability, а не переда
 - Усі Batch `body.model` мусять exact збігатися з active advertised worker
   model ID; missing або один mismatch відхиляє весь Batch до job ID/cursor/queue
   admission, без неявної model substitution чи per-record fallback.
+- `POST /v1/batches` без active ready worker/current model descriptor повертає
+  typed `503 model_unavailable` до Batch ID/cursor/queue/durable metadata; API
+  не приймає deferred-validation job і не використовує last-known model ID.
 - Batch є text-only: один image, audio, file або інший non-text content part
   відхиляє весь Batch під час streaming create preflight до job ID/cursor/queue
   admission; сервер не strip-ить modality і не створює per-record fallback.
