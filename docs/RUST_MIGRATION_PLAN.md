@@ -793,6 +793,13 @@ Batch є атомарно прив'язаним до active advertised model ID 
 model_unavailable` до Batch ID, cursor, queue admission чи durable metadata;
 він не приймає job для відкладеної validation і не довіряє last-known model ID.
 
+Після успішного create Batch durable pin-ить model-generation fingerprint:
+public model ID, manifest identity та prompt-dialect/config generation. Перед
+кожним dispatch dispatcher звіряє його з active worker. Якщо generation
+відрізняється, record не запускається і отримує canonical `model_unavailable`
+error; API не виконує його на новому artifact навіть за того самого public model
+ID і не змішує outputs різних model generations в одному Batch.
+
 Ранній Batch text-only: `body.messages` кожного record можуть містити лише
 підтримуваний text content. Один image, audio, file або інший non-text modality
 відхиляє весь Batch у тому ж streaming create preflight до job ID, cursor,
@@ -1085,6 +1092,9 @@ dimensions/bytes limit і explicit architecture capability, а не переда
 - `POST /v1/batches` без active ready worker/current model descriptor повертає
   typed `503 model_unavailable` до Batch ID/cursor/queue/durable metadata; API
   не приймає deferred-validation job і не використовує last-known model ID.
+- Batch durable pin-ить model ID + manifest/dialect/config generation; mismatch
+  active worker перед dispatch дає `model_unavailable` для record без запуску,
+  а outputs різних model artifacts не змішуються в одному Batch.
 - Batch є text-only: один image, audio, file або інший non-text content part
   відхиляє весь Batch під час streaming create preflight до job ID/cursor/queue
   admission; сервер не strip-ить modality і не створює per-record fallback.
