@@ -740,6 +740,12 @@ Upload однопрохідно перевіряє JSONL syntax, UTF-8, line bou
 context limit і generation policy перевіряються dispatcher перед reservation
 конкретного рядка та потрапляють у його output/error record.
 
+Для підтримуваного Chat Batch кожен input record мусить мати непорожній
+`custom_id`, `method: "POST"`, `url: "/v1/chat/completions"` і JSON-object
+`body`. `custom_id` унікальний у межах input file; missing/duplicate ID,
+інший method/URL або не-object body відхиляють upload до artifact publish.
+Server не генерує або не переписує client IDs.
+
 Model/family-dependent semantic failure одного record не зупиняє Batch.
 Dispatcher persistently завершує цей record як failed, додає structured entry
 до error JSONL, оновлює counters і продовжує cursor з наступним рядком.
@@ -776,6 +782,9 @@ dimensions/bytes limit і explicit architecture capability, а не переда
   durable зберігається та round-trips без зміни у create/retrieve/list.
 - Batch create приймає лише `/v1/chat/completions`; інші endpoint-и відхилені
   до job creation, без cursor або worker admission.
+- Кожен Batch JSONL record має unique non-empty `custom_id`, exact
+  `POST /v1/chat/completions` і object `body`; malformed records відхилені до
+  artifact publish, без server-generated IDs.
 - Два валідні `POST /v1/batches` створюють два різні IDs навіть з однаковим
   `Idempotency-Key`; header не створює TurboFieldfare-specific semantics.
 - Large Batch не розгортається в RAM: input/output/error є лише filesystem
