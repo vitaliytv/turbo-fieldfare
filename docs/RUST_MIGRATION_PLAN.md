@@ -518,6 +518,10 @@ worker не ready, unavailable або не має current descriptor, endpoint �
 typed `503 model_unavailable`; API не показує empty list, last-known descriptor
 або model, яку ще неможливо прийняти у Chat/Batch request.
 
+`GET /health` має readiness semantics: `200` лише коли API process і active
+worker ready для generation. Worker unavailable/not-ready повертає `503`, а
+health body не маскує цей стан stale model descriptor або historical readiness.
+
 Mock backend з `test-support` генерує детерміновані події `prepared`, `content`,
 `tool_call`, `completed` і `failed` з sequence number. Він має дозволяти
 тестувати slow clients, cancellation, duplicate-delivery defense, invalid UTF-8
@@ -666,6 +670,8 @@ admission, а не generation parallelism. Більше значення зме�
   server.
 - `GET /v1/models` повертає лише active ready worker generation; без неї має
   typed `503 model_unavailable`, без empty або historical model list.
+- `GET /health` повертає `200` лише за API + active worker readiness; worker
+  unavailable/not-ready має `503`, без stale readiness/model status.
 - Text, Unicode, tool calls, finish reasons, errors і usage збігаються.
 - Interactive і Batch робота використовують одну авторитетну worker queue.
 - Queue order для interactive і Batch є strict FIFO та покривається fixtures.
