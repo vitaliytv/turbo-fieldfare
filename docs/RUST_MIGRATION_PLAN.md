@@ -823,6 +823,11 @@ Overflow завершує лише цей record canonical `context_length_excee
 worker generation; API не обрізає oldest messages, system/tool history або
 prompt text, а cursor продовжує наступний valid record.
 
+Якщо `max_completion_tokens` відсутній, record може генерувати до всього
+залишку active context window після prompt render. Це не означає unbounded
+generation: effective limit є `context_window - prompt_tokens`, а Batch
+deadline, cancellation і stop conditions залишаються авторитетними межами.
+
 Batch є artifact-oriented, а не SSE transport: `body.stream=true` або
 присутній `stream_options` в будь-якому record відхиляють весь Batch під час
 create preflight до job ID/cursor/queue admission. Сервер не змінює `stream`
@@ -1071,6 +1076,9 @@ dimensions/bytes limit і explicit architecture capability, а не переда
 - Context overflow після canonical render і exact tokenizer count дає
   `context_length_exceeded` для одного record до worker generation; API не
   обрізає messages, system/tool history або prompt, а Batch продовжується.
+- За absent `max_completion_tokens` effective completion limit дорівнює всьому
+  залишку active context window після prompt render; це все ще обмежено
+  context window, Batch deadline, cancellation і stop conditions.
 - `body.stream=true` або будь-який `stream_options` відхиляє весь Batch до
   job ID/cursor/queue admission; Batch не coerc-ить stream і не буферизує
   прихований SSE, а повертає лише non-streaming Chat Completion envelopes.
