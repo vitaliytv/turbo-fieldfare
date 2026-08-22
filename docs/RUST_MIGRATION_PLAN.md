@@ -765,6 +765,12 @@ Batch є атомарно прив'язаним до active advertised model ID 
 підстановка моделі й не per-record failure; перевірка лишається bounded та не
 розгортає JSONL у RAM.
 
+Batch є artifact-oriented, а не SSE transport: `body.stream=true` або
+присутній `stream_options` в будь-якому record відхиляють весь Batch під час
+create preflight до job ID/cursor/queue admission. Сервер не змінює `stream`
+на `false` і не запускає внутрішній stream із прихованим буферизуванням; кожен
+допустимий record має один non-streaming Chat Completion у `response.body`.
+
 Batch Chat records повністю підтримують `tools` і `tool_choice` тією ж
 OpenAI/family validation, що interactive Chat Completions. Tool call повертається
 в `response.body` canonical result envelope як звичайний Chat Completion
@@ -901,6 +907,9 @@ dimensions/bytes limit і explicit architecture capability, а не переда
 - Усі Batch `body.model` мусять exact збігатися з active advertised worker
   model ID; missing або один mismatch відхиляє весь Batch до job ID/cursor/queue
   admission, без неявної model substitution чи per-record fallback.
+- `body.stream=true` або будь-який `stream_options` відхиляє весь Batch до
+  job ID/cursor/queue admission; Batch не coerc-ить stream і не буферизує
+  прихований SSE, а повертає лише non-streaming Chat Completion envelopes.
 - Batch Chat records підтримують `tools` і `tool_choice` з тією ж валідацією,
   що interactive Chat; `tool_calls` round-trip у canonical `response.body`, а
   сервер/worker ніколи не виконують їх, не мають tool credentials і не
