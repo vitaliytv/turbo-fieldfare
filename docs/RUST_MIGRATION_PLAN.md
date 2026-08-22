@@ -765,6 +765,13 @@ Batch є атомарно прив'язаним до active advertised model ID 
 підстановка моделі й не per-record failure; перевірка лишається bounded та не
 розгортає JSONL у RAM.
 
+Ранній Batch text-only: `body.messages` кожного record можуть містити лише
+підтримуваний text content. Один image, audio, file або інший non-text modality
+відхиляє весь Batch у тому ж streaming create preflight до job ID, cursor,
+queue admission чи worker dispatch. API не видаляє content parts, не
+перетворює їх на text і не відкладає помилку до per-record output; bounded
+`MediaRef` стане окремою майбутньою capability.
+
 Batch є artifact-oriented, а не SSE transport: `body.stream=true` або
 присутній `stream_options` в будь-якому record відхиляють весь Batch під час
 create preflight до job ID/cursor/queue admission. Сервер не змінює `stream`
@@ -920,6 +927,9 @@ dimensions/bytes limit і explicit architecture capability, а не переда
 - Усі Batch `body.model` мусять exact збігатися з active advertised worker
   model ID; missing або один mismatch відхиляє весь Batch до job ID/cursor/queue
   admission, без неявної model substitution чи per-record fallback.
+- Batch є text-only: один image, audio, file або інший non-text content part
+  відхиляє весь Batch під час streaming create preflight до job ID/cursor/queue
+  admission; сервер не strip-ить modality і не створює per-record fallback.
 - `body.stream=true` або будь-який `stream_options` відхиляє весь Batch до
   job ID/cursor/queue admission; Batch не coerc-ить stream і не буферизує
   прихований SSE, а повертає лише non-streaming Chat Completion envelopes.
