@@ -901,6 +901,11 @@ model/family або нездійсненний для конкретної ге�
 `json_schema` до best-effort JSON, не змінює `response_format` і не переводить
 такий випадок у Batch-wide failure.
 
+`response_format.type="json_object"` гарантує JSON object, а не best-effort
+text: generation перевіряється спільним JSON parser перед publication. Якщо
+output не є валідним object, завершується лише цей record typed canonical error;
+сервер не повертає raw text як успішний JSON-mode completion.
+
 `response_format.type="json_schema"` приймається лише для schema profile, який
 active worker явно оголосив constrained-decode capability. Невалідна schema,
 profile поза підтримуваним subset або недоступність для active model/family
@@ -1096,6 +1101,8 @@ dimensions/bytes limit і explicit architecture capability, а не переда
   interactive Chat: malformed, unavailable або нездійсненний structured
   constraint створює один canonical per-record error envelope, без silent
   format downgrade чи Batch-wide failure.
+- `response_format.type="json_object"` повертає лише валідний JSON object;
+  parser failure дає typed canonical per-record error, без raw-text success.
 - `response_format.type="json_schema"` приймається лише для оголошеного
   worker constrained-decode schema profile; невалідна або unavailable schema
   дає typed canonical per-record error, без best-effort JSON чи downgrade до
