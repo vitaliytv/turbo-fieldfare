@@ -935,6 +935,13 @@ Batch надсилає звичайні generation requests через IPC і н
 авторитетний worker лишається single-active-generation, доки окремий benchmark
 не доведе безпечний інший режим.
 
+Якщо worker crash або IPC transport loss перериває dispatched Batch record без
+durable terminal result, dispatcher materializes рівно один `model_error`
+envelope для цього record і не надсилає його повторно — незалежно від того,
+чи встиг worker надіслати `prepared`. Після worker recovery dispatcher може
+продовжити лише наступний недиспатчений record; already terminal result ніколи
+не дублюється.
+
 Files, Batch і conversation history зберігаються над IPC через малий
 versioned `job-store` contract у спільному global namespace з idempotency і
 expiry. У першій версії немає namespace за principal: loopback та всі
@@ -1204,7 +1211,8 @@ dimensions/bytes limit і explicit architecture capability, а не переда
 - Cancellation правильно доходить до queued та active work.
 - Семантика server restart явно визначена й протестована.
 - Job transitions і output/error JSONL є idempotent за request/job IDs після
-  API restart; worker retry не дублює completed output.
+  API restart; worker crash materializes один `model_error` для interrupted
+  record без automatic re-generation, а completed output не дублюється.
 - SwiftNIO більше не потрібен у production launch path.
 
 ## Етап 5: GTurbo V1, MoE descriptors і family adapters без Metal
