@@ -795,6 +795,11 @@ queue admission чи worker dispatch. API не видаляє content parts, н�
 перетворює їх на text і не відкладає помилку до per-record output; bounded
 `MediaRef` стане окремою майбутньою capability.
 
+До cross-family prompt-dialect contract роль `developer` не входить до Batch
+`body.messages`: один такий message відхиляє весь Batch у create preflight до
+job ID/cursor/queue admission. API не зливає його з `system` і не дозволяє
+family adapter-ам неявно змінювати hierarchy інструкцій.
+
 Batch є artifact-oriented, а не SSE transport: `body.stream=true` або
 присутній `stream_options` в будь-якому record відхиляють весь Batch під час
 create preflight до job ID/cursor/queue admission. Сервер не змінює `stream`
@@ -1004,6 +1009,9 @@ dimensions/bytes limit і explicit architecture capability, а не переда
 - Batch є text-only: один image, audio, file або інший non-text content part
   відхиляє весь Batch під час streaming create preflight до job ID/cursor/queue
   admission; сервер не strip-ить modality і не створює per-record fallback.
+- До cross-family prompt-dialect contract `developer` message в одному record
+  відхиляє весь Batch до job ID/cursor/queue admission; сервер не зливає його
+  з `system` і не змінює hierarchy інструкцій неявно.
 - `body.stream=true` або будь-який `stream_options` відхиляє весь Batch до
   job ID/cursor/queue admission; Batch не coerc-ить stream і не буферизує
   прихований SSE, а повертає лише non-streaming Chat Completion envelopes.
