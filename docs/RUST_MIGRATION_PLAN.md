@@ -715,9 +715,11 @@ object, що повертають create/retrieve. Pagination не додає te
 Підтримується лише `completion_window=24h`; він фіксується під час Batch create
 разом із deadline. Після deadline dispatcher припиняє новий dispatch, прибирає
 queued records і надсилає cancellation active record. Після terminal
-acknowledgement Batch стає `expired`; already-produced output/error і counters
-лишаються доступними за звичайним retention policy. Довільні completion windows
-не входять у першу OpenAI-compatible surface.
+acknowledgement Batch стає `expired`; кожен record без уже durable HTTP result
+отримує один canonical error envelope з `response=null` і
+`error.code=batch_expired`. Already-produced output/error і counters лишаються
+доступними за звичайним retention policy. Довільні completion windows не
+входять у першу OpenAI-compatible surface.
 
 Batch `metadata` підтримується повністю: optional map до 16 string pairs,
 ключ до 64 characters і value до 512 characters. Валідація виконується на
@@ -815,7 +817,9 @@ idempotent.
 `POST /v1/batches/{id}/cancel` має негайну семантику: transaction переводить
 Batch у `cancelling`, знімає його queued records з admission і за потреби
 надсилає cancellation active record у worker. Після terminal acknowledgement
-Batch стає `cancelled`; уже durable output/error artifacts і counters
+Batch стає `cancelled`; кожен record без already durable HTTP result отримує
+рівно один canonical error envelope з `response=null` і
+`error.code=batch_cancelled`. Уже durable output/error artifacts і counters
 зберігаються до свого TTL. Повторний cancel не змінює результат і є
 idempotent.
 Media не входить у цей етап: майбутній `MediaRef` матиме ID, MIME,
@@ -870,6 +874,9 @@ dimensions/bytes limit і explicit architecture capability, а не переда
   durable failed counter; наступні records продовжують виконуватися.
 - Batch із terminal records і `request_counts.failed > 0` має статус
   `completed`, а output/error JSONL і counters повністю пояснюють результат.
+- Terminal `cancelled` або `expired` Batch materializes кожен record без
+  durable HTTP result як рівно один error JSONL envelope з відповідно
+  `batch_cancelled` або `batch_expired`; сума completed і failed дорівнює total.
 - Restart API не втрачає Files/Batch metadata, global lifecycle, expiry або
   idempotent job result; це перевіряється проти SQLite backend.
 - Interrupted upload або output publish не робить частковий artifact видимим;
@@ -883,7 +890,8 @@ dimensions/bytes limit і explicit architecture capability, а не переда
   до terminal states; already-produced output/error лишаються доступними.
 - Batch cancel не dispatch-ить нових records, знімає queued records, передає
   cancellation active record і стає `cancelled` після terminal acknowledgement;
-  existing output/error/counters зберігаються.
+  existing output/error/counters зберігаються, а кожен не завершений record
+  має canonical `batch_cancelled` error envelope.
 - Cancellation правильно доходить до queued та active work.
 - Семантика server restart явно визначена й протестована.
 - Job transitions і output/error JSONL є idempotent за request/job IDs після
