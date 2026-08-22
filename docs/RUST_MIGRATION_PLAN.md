@@ -723,6 +723,13 @@ transition, лише один раз і ніколи не переписують
 create/retrieve/list/cancel responses повертають ці поля з однакової
 transactional state.
 
+Batch-level failure повертає `errors={object:"list",data:[BatchError]}`, де
+кожен `BatchError` має `code`, `message`, optional `param` та optional input
+`line`; не застосовні `param`/`line` серіалізуються як `null`. Усі інші Batch
+statuses повертають `errors=null`. Це не заміняє per-record error JSONL:
+останній описує individual request failures, тоді як `errors` пояснює лише
+неможливість виконати Batch як job.
+
 Підтримується лише `completion_window=24h`; він фіксується під час Batch create
 разом із deadline. Після deadline dispatcher припиняє новий dispatch, прибирає
 queued records і надсилає cancellation active record. Після terminal
@@ -869,6 +876,10 @@ dimensions/bytes limit і explicit architecture capability, а не переда
   `in_progress`, `finalizing`, `completed`, `failed`, `expired`, `cancelling`,
   `cancelled`; усі `*_at` timestamps встановлюються один раз на transition і
   однаково round-trip через create/retrieve/list/cancel, включно після restart.
+- Batch-level `failed` повертає canonical
+  `errors={object:"list",data:[{code,message,param,line}]}`, де absent
+  `param`/`line` є `null`; інші statuses мають `errors=null`, а per-record
+  failures лишаються тільки в error JSONL.
 - Batch create приймає лише `/v1/chat/completions`; інші endpoint-и відхилені
   до job creation, без cursor або worker admission.
 - Кожен Batch JSONL record має unique non-empty `custom_id`, exact
