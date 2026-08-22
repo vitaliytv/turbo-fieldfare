@@ -803,6 +803,12 @@ Batch у create preflight до job ID/cursor/queue admission. API не ігно�
 `response.body`; майбутня підтримка вимагатиме real logits-derived contract
 worker і conformance fixtures.
 
+До Rust-worker parity для кількох tool calls `parallel_tool_calls` не входить
+до Batch surface: його присутність, включно зі значенням `false`, хоча б в
+одному record відхиляє весь Batch у create preflight до job ID/cursor/queue
+admission. Сервер не serializes цей hint і не вдає його підтримку; майбутнє
+ввімкнення вимагатиме explicit capability та conformance fixtures.
+
 Batch Chat records повністю підтримують `tools` і `tool_choice` тією ж
 OpenAI/family validation, що interactive Chat Completions. Tool call повертається
 в `response.body` canonical result envelope як звичайний Chat Completion
@@ -967,6 +973,10 @@ dimensions/bytes limit і explicit architecture capability, а не переда
 - До Rust-worker logprob parity будь-який Batch record із `logprobs` або
   `top_logprobs` відхиляє весь Batch до job ID/cursor/queue admission; сервер
   не ігнорує поля та не синтезує або частково не повертає logprobs.
+- До Rust-worker parity для кількох tool calls присутній
+  `parallel_tool_calls`, включно з `false`, відхиляє весь Batch до
+  job ID/cursor/queue admission; сервер не serializes цей hint і не вдає його
+  підтримку.
 - Batch Chat records підтримують `tools` і `tool_choice` з тією ж валідацією,
   що interactive Chat; `tool_calls` round-trip у canonical `response.body`, а
   сервер/worker ніколи не виконують їх, не мають tool credentials і не
