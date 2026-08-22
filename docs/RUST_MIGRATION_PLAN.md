@@ -513,6 +513,11 @@ Bootstrap може тимчасово початися з `protocol`, `openai-ap
 - request cancellation та обмежений backpressure
 - структуроване логування request і phase без prompt/secret content
 
+`GET /v1/models` повертає лише active ready worker model generation. Коли
+worker не ready, unavailable або не має current descriptor, endpoint повертає
+typed `503 model_unavailable`; API не показує empty list, last-known descriptor
+або model, яку ще неможливо прийняти у Chat/Batch request.
+
 Mock backend з `test-support` генерує детерміновані події `prepared`, `content`,
 `tool_call`, `completed` і `failed` з sequence number. Він має дозволяти
 тестувати slow clients, cancellation, duplicate-delivery defense, invalid UTF-8
@@ -659,6 +664,8 @@ admission, а не generation parallelism. Більше значення зме�
 
 - Rust API разом зі Swift worker проходить HTTP contract suite старого Swift
   server.
+- `GET /v1/models` повертає лише active ready worker generation; без неї має
+  typed `503 model_unavailable`, без empty або historical model list.
 - Text, Unicode, tool calls, finish reasons, errors і usage збігаються.
 - Interactive і Batch робота використовують одну авторитетну worker queue.
 - Queue order для interactive і Batch є strict FIFO та покривається fixtures.
