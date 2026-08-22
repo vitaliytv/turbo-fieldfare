@@ -783,6 +783,14 @@ Batch підтримує тільки `body.n` відсутній або exact `
 admission: сервер не serializes multiple candidates, не створює кілька output
 lines для одного `custom_id` і не приводить значення до `1` неявно.
 
+Batch має окремий fixed greedy sampling profile: `temperature=0`, `top_p=1` і
+`top_k=1`. Присутність `temperature`, `top_p`, `top_k`, `seed` або іншого
+sampling override хоча б в одному record відхиляє весь Batch у create preflight
+до job ID/cursor/queue admission; API не ігнорує або не нормалізує override.
+Це deterministic contract лише в межах конкретного runtime build і model
+artifact, а не обіцянка byte-identical output між різними Metal пристроями чи
+версіями runtime.
+
 До Rust-worker logprob parity Batch не підтримує `body.logprobs` чи
 `body.top_logprobs`: присутність будь-якого з цих полів у record відхиляє весь
 Batch у create preflight до job ID/cursor/queue admission. API не ігнорує поля,
@@ -943,6 +951,11 @@ dimensions/bytes limit і explicit architecture capability, а не переда
 - Batch підтримує лише absent `body.n` або `n=1`; будь-яке інше значення
   відхиляє весь Batch до job ID/cursor/queue admission без multiple candidates,
   кількох output lines на `custom_id` чи неявного clamp до `1`.
+- Batch має fixed greedy profile `temperature=0`, `top_p=1`, `top_k=1`;
+  `temperature`, `top_p`, `top_k`, `seed` або інший sampling override в одному
+  record відхиляє весь Batch до job ID/cursor/queue admission, без silent
+  normalization. Determinism обмежений конкретними runtime build і model
+  artifact.
 - До Rust-worker logprob parity будь-який Batch record із `logprobs` або
   `top_logprobs` відхиляє весь Batch до job ID/cursor/queue admission; сервер
   не ігнорує поля та не синтезує або частково не повертає logprobs.
