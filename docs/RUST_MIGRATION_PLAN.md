@@ -688,6 +688,13 @@ acknowledgement Batch стає `expired`; already-produced output/error і count
 лишаються доступними за звичайним retention policy. Довільні completion windows
 не входять у першу OpenAI-compatible surface.
 
+Strict Batch parity не додає окремої idempotency surface: `POST /v1/batches`
+завжди створює новий Batch після успішної валідації. `Idempotency-Key` та інші
+недокументовані для цього endpoint headers не впливають на create semantics і
+не зберігаються як key-to-Batch mapping. Внутрішня idempotency `job-store`
+залишається лише механізмом crash/retry-safe transitions, а не публічним
+deduplication contract.
+
 Batch надсилає звичайні generation requests через IPC і ніколи не обходить
 межу серіалізації worker. Це OpenAI Batch API, а не GPU micro-batching:
 авторитетний worker лишається single-active-generation, доки окремий benchmark
@@ -754,6 +761,8 @@ dimensions/bytes limit і explicit architecture capability, а не переда
 - Batch приймає лише `completion_window=24h`; expiry припиняє dispatch,
   скасовує queued/active work і переходить у `expired`, не втрачаючи durable
   output/error records.
+- Два валідні `POST /v1/batches` створюють два різні IDs навіть з однаковим
+  `Idempotency-Key`; header не створює TurboFieldfare-specific semantics.
 - Large Batch не розгортається в RAM: input/output/error є лише filesystem
   artifacts, а SQLite містить тільки metadata/cursor; restart не дублює рядок
   або output record.
