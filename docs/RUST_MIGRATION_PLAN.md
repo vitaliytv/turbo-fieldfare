@@ -979,6 +979,12 @@ manifest, prompt dialect і config generation. Fingerprint змінюється 
 несумісній зміні цих складників та не містить user ID, hardware ID, path,
 prompt, credential або інших секретів.
 
+Backend failure у error JSONL використовує bounded public taxonomy
+`model_unavailable`, `model_error` або `internal_error` і redacted message.
+Published `batch_req_*` `id` є correlation ID для локальних diagnostics; raw
+Swift/Metal/OS errors, paths, config values і stack details не потрапляють у
+Batch artifact або API error body.
+
 Upload однопрохідно перевіряє JSONL syntax, UTF-8, line boundaries та
 мінімальні required fields для Batch record до atomic publish artifact. Це не
 виконує family-dependent validation: prompt dialect, context limit і generation
@@ -1170,6 +1176,9 @@ dimensions/bytes limit і explicit architecture capability, а не переда
 - Успішний Chat Completion має opaque local `system_fingerprint` від
   output-affecting API/worker/model/prompt/config identity; він не містить
   user/device/path/prompt/secret даних і змінюється за несумісної зміни.
+- Backend failure у error JSONL має лише `model_unavailable`, `model_error`
+  або `internal_error` і redacted message; `batch_req_*` ID пов'язує локальні
+  diagnostics, але raw worker/Metal/OS details у artifact не виходять.
 - Semantic failure одного record створює canonical error JSONL envelope й
   durable failed counter; наступні records продовжують виконуватися.
 - Batch із terminal records і `request_counts.failed > 0` має статус
