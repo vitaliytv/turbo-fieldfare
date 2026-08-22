@@ -513,6 +513,11 @@ Bootstrap може тимчасово початися з `protocol`, `openai-ap
 - request cancellation та обмежений backpressure
 - структуроване логування request і phase без prompt/secret content
 
+Interactive SSE client disconnect негайно надсилає idempotent cancellation у
+worker. Рання API surface не має event buffer, `Last-Event-ID`, resume або replay:
+після disconnect generation не продовжується у background, а нове підключення
+є новим request із новим lifecycle.
+
 `GET /v1/models` повертає лише active ready worker model generation. Коли
 worker не ready, unavailable або не має current descriptor, endpoint повертає
 typed `503 model_unavailable`; API не показує empty list, last-known descriptor
@@ -541,6 +546,8 @@ Mock backend з `test-support` генерує детерміновані под�
 - `cargo test --workspace`
 - HTTP contract fixtures проходять для реалізованих routes.
 - Від'єднання streaming client скасовує mock generation.
+- Interactive SSE disconnect скасовує worker generation; немає event buffer,
+  `Last-Event-ID`, resume або replay, а нове підключення є новим request.
 - Повільні clients не спричиняють необмежену буферизацію.
 - Один request має рівно один terminal event; content events мають строго
   зростаючу sequence і не повторюються після cancellation/error.
