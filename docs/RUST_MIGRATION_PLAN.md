@@ -973,6 +973,12 @@ tokenizer-derived `usage.prompt_tokens`, `usage.completion_tokens` і
 виміряв reuse prompt/KV cache; якщо такого вимірювання немає, detail absent, а
 не synthetic `0`.
 
+Успішний Chat Completion також містить opaque local `system_fingerprint` від
+canonical output-affecting runtime identity: API/worker build, active model
+manifest, prompt dialect і config generation. Fingerprint змінюється при
+несумісній зміні цих складників та не містить user ID, hardware ID, path,
+prompt, credential або інших секретів.
+
 Upload однопрохідно перевіряє JSONL syntax, UTF-8, line boundaries та
 мінімальні required fields для Batch record до atomic publish artifact. Це не
 виконує family-dependent validation: prompt dialect, context limit і generation
@@ -1161,6 +1167,9 @@ dimensions/bytes limit і explicit architecture capability, а не переда
 - Успішний Chat Completion body має exact tokenizer-derived
   `usage.prompt_tokens`, `completion_tokens`, `total_tokens`; cached-token
   detail присутній лише за точного worker measurement, ніколи як estimate.
+- Успішний Chat Completion має opaque local `system_fingerprint` від
+  output-affecting API/worker/model/prompt/config identity; він не містить
+  user/device/path/prompt/secret даних і змінюється за несумісної зміни.
 - Semantic failure одного record створює canonical error JSONL envelope й
   durable failed counter; наступні records продовжують виконуватися.
 - Batch із terminal records і `request_counts.failed > 0` має статус
