@@ -525,6 +525,11 @@ tokens. Внутрішній lifecycle все одно має один cancelled
 вже повільний socket може побачити лише закриття після partial SSE. Buffer
 overflow reason потрапляє лише в redacted telemetry без prompt content.
 
+Якщо worker/model failure стається після першого SSE content chunk, API закриває
+stream без synthetic Chat Completion terminal, SSE error event або `[DONE]`.
+Клієнт бачить interrupted partial stream; API не підміняє failure нормальним
+`finish_reason="stop"` і не стверджує successful completion.
+
 `GET /v1/models` повертає лише active ready worker model generation. Коли
 worker не ready, unavailable або не має current descriptor, endpoint повертає
 typed `503 model_unavailable`; API не показує empty list, last-known descriptor
@@ -559,6 +564,9 @@ Mock backend з `test-support` генерує детерміновані под�
 - Slow SSE client, що переповнив bounded adapter buffer, скасовує generation;
   worker FIFO не блокується, окремі tokens не drop-аються, а reason є лише в
   redacted telemetry.
+- Worker/model failure після першого SSE content chunk закриває stream без
+  synthetic terminal, SSE error event або `[DONE]`; клієнт бачить interrupted
+  partial stream, не normal `finish_reason="stop"`.
 - Один request має рівно один terminal event; content events мають строго
   зростаючу sequence і не повторюються після cancellation/error.
 - UTF-8 boundary tests покривають split scalar, tool JSON і heartbeats.
