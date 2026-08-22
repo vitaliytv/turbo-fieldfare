@@ -683,7 +683,7 @@ admission, а не generation parallelism. Більше значення зме�
 - file retrieve/status, content і delete; `GET /v1/files` не підтримується
 - streaming JSONL syntax і required-field validation під час upload
 - Batch create, list, status, cancel, expiry і pagination
-- output та error JSONL files
+- canonical OpenAI Batch output та error JSONL envelopes
 - поточні metadata і compatibility limits
 
 Supported Files surface приймає uploads лише з `purpose=batch`. Інші purpose
@@ -773,6 +773,14 @@ queue slot; output/error JSONL є append-only artifacts, що звіряютьс
 persisted record state після restart. Так queue залишається bounded незалежно
 від розміру Batch.
 
+Кожен published Batch-result line має canonical envelope
+`{id,custom_id,response,error}`. `id` — server-generated `batch_req_*`,
+`custom_id` точно повторює input, а successful або HTTP-completed request має
+`response={status_code,request_id,body}` та `error=null`. Request без
+HTTP-відповіді має `response=null` і `error={code,message}`. Успішні 2xx
+envelopes йдуть у output JSONL, terminal failures — у error JSONL; у кожному
+line немає TurboFieldfare-specific полів.
+
 Upload однопрохідно перевіряє JSONL syntax, UTF-8, line boundaries та
 мінімальні required fields для Batch record до atomic publish artifact. Це не
 виконує family/model-dependent validation: endpoint support, prompt dialect,
@@ -790,8 +798,8 @@ publish, не створюючи FileObject, artifact або BatchCursor.
 Server не генерує або не переписує client IDs.
 
 Model/family-dependent semantic failure одного record не зупиняє Batch.
-Dispatcher persistently завершує цей record як failed, додає structured entry
-до error JSONL, оновлює counters і продовжує cursor з наступним рядком.
+Dispatcher persistently завершує цей record як failed, додає canonical error
+envelope до error JSONL, оновлює counters і продовжує cursor з наступним рядком.
 Batch переходить у `completed`, коли всі його records terminal, навіть якщо
 `request_counts.failed > 0`; клієнт читає partial failure через counters та
 error JSONL. Жоден record не пропускається тихо.
@@ -817,7 +825,7 @@ dimensions/bytes limit і explicit architecture capability, а не переда
 ### Критерій завершення
 
 - Повний black-box HTTP contract suite проходить із Rust.
-- Batch status transitions і result/error JSONL збігаються.
+- Batch status transitions і canonical result/error JSONL envelopes збігаються.
 - Batch приймає лише `completion_window=24h`; expiry припиняє dispatch,
   скасовує queued/active work і переходить у `expired`, не втрачаючи durable
   output/error records.
@@ -855,7 +863,10 @@ dimensions/bytes limit і explicit architecture capability, а не переда
 - Invalid JSONL syntax або missing required fields відхиляються до publish;
   model/family-dependent semantic failures оформлюються per-record під час
   dispatch без пошкодження решти Batch.
-- Semantic failure одного record створює structured error JSONL entry й
+- Кожен result line є canonical `{id,custom_id,response,error}` без локальних
+  полів: HTTP result має `response.status_code/request_id/body` та `error=null`,
+  а non-HTTP failure — `response=null` і `error.code/message`.
+- Semantic failure одного record створює canonical error JSONL envelope й
   durable failed counter; наступні records продовжують виконуватися.
 - Batch із terminal records і `request_counts.failed > 0` має статус
   `completed`, а output/error JSONL і counters повністю пояснюють результат.
