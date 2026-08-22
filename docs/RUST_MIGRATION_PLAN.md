@@ -802,6 +802,13 @@ legacy `max_tokens` хоча б в одному record відхиляє весь
 preflight до job ID/cursor/queue admission: сервер не читає його як alias, не
 вибирає неявний пріоритет і не запускає record із застарілим полем.
 
+До Rust-worker tokenizer-aware logit-transform parity `body.logit_bias` не
+підтримується: його присутність хоча б в одному record відхиляє весь Batch у
+create preflight до job ID/cursor/queue admission. API не ігнорує map і не
+передає неперевірені token IDs у Swift worker; майбутня підтримка вимагатиме
+family tokenizer validation, bounded bias values і реального застосування в
+sampler.
+
 До Rust-worker logprob parity Batch не підтримує `body.logprobs` чи
 `body.top_logprobs`: присутність будь-якого з цих полів у record відхиляє весь
 Batch у create preflight до job ID/cursor/queue admission. API не ігнорує поля,
@@ -986,6 +993,9 @@ dimensions/bytes limit і explicit architecture capability, а не переда
 - Batch підтримує лише `max_completion_tokens`; legacy `max_tokens` в одному
   record відхиляє весь Batch до job ID/cursor/queue admission, без alias або
   неявного пріоритету.
+- До Rust-worker tokenizer-aware logit-transform parity `logit_bias` в одному
+  record відхиляє весь Batch до job ID/cursor/queue admission; сервер не
+  ігнорує map і не передає неперевірені token IDs у worker.
 - До Rust-worker logprob parity будь-який Batch record із `logprobs` або
   `top_logprobs` відхиляє весь Batch до job ID/cursor/queue admission; сервер
   не ігнорує поля та не синтезує або частково не повертає logprobs.
