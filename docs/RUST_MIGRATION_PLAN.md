@@ -694,6 +694,11 @@ create, SQLite зберігає canonical map, а кожна Batch відпов�
 зміни. Metadata не передається worker, не впливає на scheduler і не потрапляє
 до telemetry за замовчуванням.
 
+Для strict supported-surface parity `endpoint` на Batch create може бути лише
+`/v1/chat/completions`. Будь-який інший endpoint відхиляється до створення job
+з typed unsupported-endpoint error; dispatcher ніколи не приймає завідомо
+непідтримуваний Batch та не перетворює його на per-record failures.
+
 Strict Batch parity не додає окремої idempotency surface: `POST /v1/batches`
 завжди створює новий Batch після успішної валідації. `Idempotency-Key` та інші
 недокументовані для цього endpoint headers не впливають на create semantics і
@@ -769,6 +774,8 @@ dimensions/bytes limit і explicit architecture capability, а не переда
   output/error records.
 - Batch `metadata` приймає до 16 string pairs із лімітами key/value 64/512,
   durable зберігається та round-trips без зміни у create/retrieve/list.
+- Batch create приймає лише `/v1/chat/completions`; інші endpoint-и відхилені
+  до job creation, без cursor або worker admission.
 - Два валідні `POST /v1/batches` створюють два різні IDs навіть з однаковим
   `Idempotency-Key`; header не створює TurboFieldfare-specific semantics.
 - Large Batch не розгортається в RAM: input/output/error є лише filesystem
