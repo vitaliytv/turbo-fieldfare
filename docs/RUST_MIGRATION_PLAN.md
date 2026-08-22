@@ -300,7 +300,9 @@ gemma4-repack, qwen36-repack -> repack-core, model-source, gturbo-format
   зберігаються до explicit delete. Conversation history не є OpenAI Files
   resource й лишається локальною 7-денною політикою. Expired input стає
   недоступним до physical GC; explicit delete є idempotent і може звільнити
-  artifact раніше.
+  artifact раніше. Upload `expires_after` зберігає повний Files contract:
+  exact object `{ anchor: "created_at", seconds }` визначає індивідуальний
+  `expires_at` Batch input; якщо параметр відсутній, діє default 30 днів.
 - `ipc-client` є окремою реалізацією backend trait; HTTP crate не знає, чи
   backend локальний, IPC або тестовий.
 - `gturbo-format` не виконує network чи Metal I/O; `gturbo-store` не знає про
@@ -689,7 +691,11 @@ semantics. Batch input FileObject зберігає `purpose=batch`, а output і
 JSONL, створені server, мають `purpose=batch_output` і доступні через звичайні
 retrieve/content/delete routes. Input `batch` має strict 30-денний TTL, тоді
 як server-generated `batch_output` зберігається до explicit delete; 7-денна
-conversation history не є Files artifact.
+conversation history не є Files artifact. Для input підтримується
+`expires_after={anchor:"created_at",seconds}`: він валідовується до artifact
+write, обчислює та повертає FileObject `expires_at`; без параметра сервер
+повертає default `created_at + 30 days`. Generated `batch_output` не приймає
+та не повертає custom expiry.
 
 Підтримується лише `completion_window=24h`; він фіксується під час Batch create
 разом із deadline. Після deadline dispatcher припиняє новий dispatch, прибирає
@@ -792,6 +798,10 @@ dimensions/bytes limit і explicit architecture capability, а не переда
   durable зберігається та round-trips без зміни у create/retrieve/list.
 - Files upload приймає лише `purpose=batch`; Batch input має `batch`, а
   server-generated output/error artifacts мають `purpose=batch_output`.
+- Files upload повністю підтримує `expires_after` з anchor `created_at` і
+  `seconds`: valid policy повертає обчислений `expires_at`, а absent policy —
+  default `created_at + 30 days`; malformed або unsupported policy не створює
+  artifact. Server-generated `batch_output` лишається без custom expiry.
 - Batch create приймає лише `/v1/chat/completions`; інші endpoint-и відхилені
   до job creation, без cursor або worker admission.
 - Кожен Batch JSONL record має unique non-empty `custom_id`, exact
@@ -813,7 +823,8 @@ dimensions/bytes limit і explicit architecture capability, а не переда
   idempotent job result; це перевіряється проти SQLite backend.
 - Interrupted upload або output publish не робить частковий artifact видимим;
   restart/GC safely прибирає staging і підтверджені orphaned files.
-- Input `purpose=batch` зникає з API через 30 днів до physical GC;
+- Input `purpose=batch` зникає з API через default 30 днів або свій
+  валідний `expires_after` до physical GC;
   server-generated `purpose=batch_output` не має automatic TTL і видаляється
   лише вручну. Manual delete та повторний delete є безпечними й idempotent.
 - Delete input file atomically переводить усі залежні non-terminal Batch jobs
