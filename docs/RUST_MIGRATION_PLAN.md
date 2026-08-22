@@ -758,6 +758,11 @@ preflight до job ID/cursor/queue admission: API не зберігає opaque l
 виводить telemetry identity і не створює неявної authorization або namespace
 isolation.
 
+`service_tier` не входить до Batch surface: його присутність хоча б в одному
+record відхиляє весь Batch у create preflight до job ID/cursor/queue admission.
+Single-worker strict FIFO не має cloud tier, priority, credit чи SLA semantics,
+тому API не мапить `auto`, `default` або `flex` у ту саму чергу.
+
 `output_expires_after` є optional Batch-create policy для обох generated
 `batch_output` Files. Підтримується тільки exact
 `{anchor:"created_at",seconds}` з `seconds` 3 600…2 592 000; anchor прив'язаний
@@ -1043,6 +1048,9 @@ dimensions/bytes limit і explicit architecture capability, а не переда
 - `body.user` в одному record відхиляє весь Batch до job ID/cursor/queue
   admission, доки окремий principal/audit contract не визначить його семантику;
   поле не створює authorization, telemetry identity чи namespace isolation.
+- `service_tier` в одному record відхиляє весь Batch до
+  job ID/cursor/queue admission: single-worker strict FIFO не має tier,
+  priority, credit або SLA semantics і не мапить усі значення в одну чергу.
 - Кожен Batch JSONL record має unique non-empty `custom_id`, exact
   `POST /v1/chat/completions` і object `body`; malformed records відхилені до
   artifact publish, без server-generated IDs.
