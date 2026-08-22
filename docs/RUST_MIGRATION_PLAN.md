@@ -807,6 +807,11 @@ result; malformed або неузгоджена history завершує лиш�
 per-record error. Family adapter рендерить validated history у власний prompt
 dialect без зведення assistant/tool content до user text.
 
+Кілька `system` messages зберігаються як окремі ordered nodes: API не merge-ить
+їх через separator і не відкидає дублікати. Family adapter явно рендерить їх у
+своєму dialect, а prompt-cache identity походить з canonical rendered prefix,
+тож зміна одного system message не може дати cache hit для іншого prompt.
+
 History із незавершеним tool loop не є dispatchable: кожен assistant tool call
 мусить мати відповідний `tool` result до наступної generation. Відсутній result
 завершує лише цей record canonical per-record error; server/worker не
@@ -1028,6 +1033,8 @@ dimensions/bytes limit і explicit architecture capability, а не переда
   ж validation, що interactive Chat: порядок, unique assistant tool-call IDs і
   exact tool `tool_call_id`; malformed history дає canonical per-record error,
   а family adapter не flatten-ить її до user text.
+- Кілька `system` messages зберігаються як окремі ordered nodes без merge або
+  deduplication; canonical rendered prefix входить у prompt-cache identity.
 - Незавершений assistant tool call без усіх відповідних `tool` results дає
   canonical per-record error; server/worker не продовжують generation, не
   виконують tool і не створюють synthetic result.
