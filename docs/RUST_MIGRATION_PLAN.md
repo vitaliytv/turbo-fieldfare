@@ -791,6 +791,12 @@ sampling override хоча б в одному record відхиляє весь B
 artifact, а не обіцянка byte-identical output між різними Metal пристроями чи
 версіями runtime.
 
+Batch підтримує `stop` string або bounded array через той самий validator і
+normalizer, що interactive Chat. Malformed або unsupported stop value завершує
+лише цей record canonical per-record validation error; valid sequences
+передаються в `llm-sampling`, завершують generation з `finish_reason="stop"`
+і не повертаються як частина assistant text.
+
 Batch підтримує лише `max_completion_tokens` як completion limit. Присутність
 legacy `max_tokens` хоча б в одному record відхиляє весь Batch у create
 preflight до job ID/cursor/queue admission: сервер не читає його як alias, не
@@ -973,6 +979,10 @@ dimensions/bytes limit і explicit architecture capability, а не переда
   record відхиляє весь Batch до job ID/cursor/queue admission, без silent
   normalization. Determinism обмежений конкретними runtime build і model
   artifact.
+- Batch `stop` string або bounded array проходить той самий validator і
+  normalizer, що interactive Chat; malformed/unsupported value дає canonical
+  per-record error, а valid sequence завершує output із `finish_reason="stop"`
+  без повернення sequence у assistant text.
 - Batch підтримує лише `max_completion_tokens`; legacy `max_tokens` в одному
   record відхиляє весь Batch до job ID/cursor/queue admission, без alias або
   неявного пріоритету.
