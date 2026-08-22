@@ -791,6 +791,12 @@ sampling override хоча б в одному record відхиляє весь B
 artifact, а не обіцянка byte-identical output між різними Metal пристроями чи
 версіями runtime.
 
+Batch приймає `max_completion_tokens` або legacy `max_tokens` як альтернативні
+імена одного internal completion limit. Record, що містить обидва поля,
+завершується canonical per-record validation error під час dispatch; сервер не
+вибирає неявний пріоритет і не запускає його з одним із двох limits. Така
+семантична помилка не зупиняє інші valid records Batch.
+
 До Rust-worker logprob parity Batch не підтримує `body.logprobs` чи
 `body.top_logprobs`: присутність будь-якого з цих полів у record відхиляє весь
 Batch у create preflight до job ID/cursor/queue admission. API не ігнорує поля,
@@ -956,6 +962,9 @@ dimensions/bytes limit і explicit architecture capability, а не переда
   record відхиляє весь Batch до job ID/cursor/queue admission, без silent
   normalization. Determinism обмежений конкретними runtime build і model
   artifact.
+- Batch приймає рівно один із `max_completion_tokens` або legacy `max_tokens`
+  як completion limit; присутність обох дає canonical per-record validation
+  error без неявного пріоритету та не зупиняє інші valid records.
 - До Rust-worker logprob parity будь-який Batch record із `logprobs` або
   `top_logprobs` відхиляє весь Batch до job ID/cursor/queue admission; сервер
   не ігнорує поля та не синтезує або частково не повертає logprobs.
