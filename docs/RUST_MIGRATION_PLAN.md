@@ -783,6 +783,13 @@ Batch підтримує тільки `body.n` відсутній або exact `
 admission: сервер не serializes multiple candidates, не створює кілька output
 lines для одного `custom_id` і не приводить значення до `1` неявно.
 
+До Rust-worker logprob parity Batch не підтримує `body.logprobs` чи
+`body.top_logprobs`: присутність будь-якого з цих полів у record відхиляє весь
+Batch у create preflight до job ID/cursor/queue admission. API не ігнорує поля,
+не підставляє synthetic значення і не повертає неповні logprobs у
+`response.body`; майбутня підтримка вимагатиме real logits-derived contract
+worker і conformance fixtures.
+
 Batch Chat records повністю підтримують `tools` і `tool_choice` тією ж
 OpenAI/family validation, що interactive Chat Completions. Tool call повертається
 в `response.body` canonical result envelope як звичайний Chat Completion
@@ -936,6 +943,9 @@ dimensions/bytes limit і explicit architecture capability, а не переда
 - Batch підтримує лише absent `body.n` або `n=1`; будь-яке інше значення
   відхиляє весь Batch до job ID/cursor/queue admission без multiple candidates,
   кількох output lines на `custom_id` чи неявного clamp до `1`.
+- До Rust-worker logprob parity будь-який Batch record із `logprobs` або
+  `top_logprobs` відхиляє весь Batch до job ID/cursor/queue admission; сервер
+  не ігнорує поля та не синтезує або частково не повертає logprobs.
 - Batch Chat records підтримують `tools` і `tool_choice` з тією ж валідацією,
   що interactive Chat; `tool_calls` round-trip у canonical `response.body`, а
   сервер/worker ніколи не виконують їх, не мають tool credentials і не
