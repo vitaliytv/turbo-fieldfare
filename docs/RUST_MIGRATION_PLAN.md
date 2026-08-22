@@ -765,6 +765,14 @@ Batch є атомарно прив'язаним до active advertised model ID 
 підстановка моделі й не per-record failure; перевірка лишається bounded та не
 розгортає JSONL у RAM.
 
+Batch Chat records повністю підтримують `tools` і `tool_choice` тією ж
+OpenAI/family validation, що interactive Chat Completions. Tool call повертається
+в `response.body` canonical result envelope як звичайний Chat Completion
+(`finish_reason="tool_calls"`); він не створює server-side follow-up, не
+запускає executable, не передає credentials у worker і не змінює worker queue.
+Клієнт виконує call у власній policy boundary та, за потреби, подає наступний
+turn як окремий request або інший Batch record.
+
 Strict Batch parity не додає окремої idempotency surface: `POST /v1/batches`
 завжди створює новий Batch після успішної валідації. `Idempotency-Key` та інші
 недокументовані для цього endpoint headers не впливають на create semantics і
@@ -893,6 +901,10 @@ dimensions/bytes limit і explicit architecture capability, а не переда
 - Усі Batch `body.model` мусять exact збігатися з active advertised worker
   model ID; missing або один mismatch відхиляє весь Batch до job ID/cursor/queue
   admission, без неявної model substitution чи per-record fallback.
+- Batch Chat records підтримують `tools` і `tool_choice` з тією ж валідацією,
+  що interactive Chat; `tool_calls` round-trip у canonical `response.body`, а
+  сервер/worker ніколи не виконують їх, не мають tool credentials і не
+  створюють follow-up turn.
 - Кожен Batch JSONL record має unique non-empty `custom_id`, exact
   `POST /v1/chat/completions` і object `body`; malformed records відхилені до
   artifact publish, без server-generated IDs.
