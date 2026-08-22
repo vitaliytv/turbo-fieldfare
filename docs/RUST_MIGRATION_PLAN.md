@@ -887,6 +887,12 @@ OpenAI/family validation, що interactive Chat Completions. Tool call пове�
 Клієнт виконує call у власній policy boundary та, за потреби, подає наступний
 turn як окремий request або інший Batch record.
 
+`tools[].function.strict=true` підтримується лише для schema profile, який
+active worker явно оголосив як constrained-decode capability. Невалідна schema
+або profile, недоступний для active model/family, завершує лише цей record
+typed canonical error; API не знижує strict tool до звичайного tool schema і
+не оголошує JSON Schema guarantee без реального constrained decoding.
+
 Batch Chat records підтримують той самий validated `response_format` contract,
 що interactive Chat. Спільний validator canonicalizes supported text/JSON mode
 та structured constraints перед dispatch; malformed, unavailable для active
@@ -1076,6 +1082,10 @@ dimensions/bytes limit і explicit architecture capability, а не переда
   що interactive Chat; `tool_calls` round-trip у canonical `response.body`, а
   сервер/worker ніколи не виконують їх, не мають tool credentials і не
   створюють follow-up turn.
+- `tools[].function.strict=true` приймається лише для schema profile, який
+  active worker оголосив constrained-decode capability; невалідна або
+  unavailable schema дає typed canonical per-record error, без downgrade до
+  звичайного tool schema.
 - Batch `response_format` використовує той самий validated contract, що
   interactive Chat: malformed, unavailable або нездійсненний structured
   constraint створює один canonical per-record error envelope, без silent
