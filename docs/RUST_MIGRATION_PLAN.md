@@ -701,6 +701,13 @@ write, обчислює та повертає FileObject `expires_at`; без п
 та не повертає custom expiry. `GET /v1/files` свідомо не routed і повертає
 звичайний endpoint-not-found response без розкриття shared resource namespace.
 
+`GET /v1/batches` є повною cursor-paginated surface над durable Batch jobs:
+підтримує тільки query `after` і `limit`; `limit` у межах 1…100, default 20,
+а `after` є ID останнього Batch з попередньої сторінки. Відповідь — CursorPage
+`{ object: "list", data, first_id, last_id, has_more }` із тими самими Batch
+object, що повертають create/retrieve. Pagination не додає tenant isolation:
+за прийнятим global namespace remote keys бачать той самий список jobs.
+
 Підтримується лише `completion_window=24h`; він фіксується під час Batch create
 разом із deadline. Після deadline dispatcher припиняє новий dispatch, прибирає
 queued records і надсилає cancellation active record. Після terminal
@@ -810,6 +817,9 @@ dimensions/bytes limit і explicit architecture capability, а не переда
   artifact. Server-generated `batch_output` лишається без custom expiry.
 - `GET /v1/files` не підтримується та не розкриває shared Files namespace;
   retrieve/content/delete конкретного known file ID лишаються підтриманими.
+- `GET /v1/batches` реалізує CursorPage `{object:"list",data,first_id,
+  last_id,has_more}` з exact `after` та `limit` (1…100, default 20); наступна
+  сторінка з `after=last_id` не пропускає та не дублює durable Batch job.
 - Batch create приймає лише `/v1/chat/completions`; інші endpoint-и відхилені
   до job creation, без cursor або worker admission.
 - Кожен Batch JSONL record має unique non-empty `custom_id`, exact
