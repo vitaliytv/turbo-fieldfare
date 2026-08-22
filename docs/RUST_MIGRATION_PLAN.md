@@ -784,6 +784,14 @@ OpenAI/family validation, що interactive Chat Completions. Tool call пове�
 Клієнт виконує call у власній policy boundary та, за потреби, подає наступний
 turn як окремий request або інший Batch record.
 
+Batch Chat records підтримують той самий validated `response_format` contract,
+що interactive Chat. Спільний validator canonicalizes supported text/JSON mode
+та structured constraints перед dispatch; malformed, unavailable для active
+model/family або нездійсненний для конкретної генерації constraint завершує
+лише цей record canonical per-record error envelope. Сервер не знижує
+`json_schema` до best-effort JSON, не змінює `response_format` і не переводить
+такий випадок у Batch-wide failure.
+
 Strict Batch parity не додає окремої idempotency surface: `POST /v1/batches`
 завжди створює новий Batch після успішної валідації. `Idempotency-Key` та інші
 недокументовані для цього endpoint headers не впливають на create semantics і
@@ -922,6 +930,10 @@ dimensions/bytes limit і explicit architecture capability, а не переда
   що interactive Chat; `tool_calls` round-trip у canonical `response.body`, а
   сервер/worker ніколи не виконують їх, не мають tool credentials і не
   створюють follow-up turn.
+- Batch `response_format` використовує той самий validated contract, що
+  interactive Chat: malformed, unavailable або нездійсненний structured
+  constraint створює один canonical per-record error envelope, без silent
+  format downgrade чи Batch-wide failure.
 - Кожен Batch JSONL record має unique non-empty `custom_id`, exact
   `POST /v1/chat/completions` і object `body`; malformed records відхилені до
   artifact publish, без server-generated IDs.
