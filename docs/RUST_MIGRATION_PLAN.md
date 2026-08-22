@@ -681,6 +681,12 @@ admission, а не generation parallelism. Більше значення зме�
 - output та error JSONL files
 - поточні metadata і compatibility limits
 
+Supported Files surface приймає uploads лише з `purpose=batch`. Інші purpose
+відхиляються до artifact write; сервер не створює generic Files без runtime
+semantics. Batch input FileObject зберігає `purpose=batch`, а output і error
+JSONL, створені server, мають `purpose=batch_output` і доступні через звичайні
+retrieve/content/delete routes.
+
 Підтримується лише `completion_window=24h`; він фіксується під час Batch create
 разом із deadline. Після deadline dispatcher припиняє новий dispatch, прибирає
 queued records і надсилає cancellation active record. Після terminal
@@ -780,6 +786,8 @@ dimensions/bytes limit і explicit architecture capability, а не переда
   output/error records.
 - Batch `metadata` приймає до 16 string pairs із лімітами key/value 64/512,
   durable зберігається та round-trips без зміни у create/retrieve/list.
+- Files upload приймає лише `purpose=batch`; Batch input має `batch`, а
+  server-generated output/error artifacts мають `purpose=batch_output`.
 - Batch create приймає лише `/v1/chat/completions`; інші endpoint-и відхилені
   до job creation, без cursor або worker admission.
 - Кожен Batch JSONL record має unique non-empty `custom_id`, exact
