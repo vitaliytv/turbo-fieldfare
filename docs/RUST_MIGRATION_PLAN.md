@@ -527,6 +527,11 @@ exact usage chunk перед `[DONE]`. За absent або `false` usage chunk н
 додається; за failure/cancellation він не синтезується. Інші `stream_options`
 не підтримуються і відхиляються до початку SSE, без неявного ignore.
 
+Усі SSE chunks одного Chat Completion мають immutable `id`, `created`, `model`
+і `system_fingerprint`. Перший assistant delta містить `role:"assistant"` рівно
+один раз; наступні content/tool/usage chunks не повторюють role і не отримують
+новий completion ID.
+
 SSE adapter утримує лише bounded buffer між worker events і client socket. Якщо
 slow client вичерпує цю межу, API скасовує worker request і завершує stream;
 він не блокує worker FIFO, не накопичує unbounded RAM і не відкидає окремі
@@ -586,6 +591,9 @@ Mock backend з `test-support` генерує детерміновані под�
 - Interactive `stream_options.include_usage=true` додає рівно один фінальний
   exact usage chunk перед `[DONE]`; absent/`false` не змінює stream, а
   failure/cancellation не створює synthetic usage chunk.
+- Усі SSE chunks одного completion мають однакові immutable `id`, `created`,
+  `model`, `system_fingerprint`; лише перший assistant delta має
+  `role:"assistant"`, без нового ID або повторення role надалі.
 - Один request має рівно один terminal event; content events мають строго
   зростаючу sequence і не повторюються після cancellation/error.
 - UTF-8 boundary tests покривають split scalar і tool JSON; heartbeat frames
