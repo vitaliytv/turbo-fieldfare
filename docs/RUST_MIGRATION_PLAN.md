@@ -505,7 +505,7 @@ Bootstrap може тимчасово початися з `protocol`, `openai-ap
 - `GET /v1/models`
 - `POST /v1/chat/completions`
 - non-streaming responses
-- SSE chunks, heartbeat, usage chunk і `[DONE]`
+- SSE chunks, usage chunk і `[DONE]`; без heartbeat
 - lossless incremental UTF-8 і monotonic `event_seq` у внутрішньому stream;
   HTTP adapter не дублює content під час flush, abort або error
 - OpenAI error envelopes
@@ -517,6 +517,10 @@ Interactive SSE client disconnect негайно надсилає idempotent can
 worker. Рання API surface не має event buffer, `Last-Event-ID`, resume або replay:
 після disconnect generation не продовжується у background, а нове підключення
 є новим request із новим lifecycle.
+
+Ранній SSE surface не надсилає heartbeat. Stream містить лише реальні Chat
+chunks, `[DONE]` після successful terminal або transport close за failure /
+cancellation; keepalive і timeout policy належать клієнту чи його proxy.
 
 SSE adapter утримує лише bounded buffer між worker events і client socket. Якщо
 slow client вичерпує цю межу, API скасовує worker request і завершує stream;
@@ -576,7 +580,8 @@ Mock backend з `test-support` генерує детерміновані под�
   а не `200` SSE error event або порожній successful `[DONE]` response.
 - Один request має рівно один terminal event; content events мають строго
   зростаючу sequence і не повторюються після cancellation/error.
-- UTF-8 boundary tests покривають split scalar, tool JSON і heartbeats.
+- UTF-8 boundary tests покривають split scalar і tool JSON; heartbeat frames
+  не генеруються.
 - `openai-api` не залежить від mock, concrete model, IPC або Metal.
 - `cargo doc` і standalone mock-server example збираються без Swift/Metal.
 
