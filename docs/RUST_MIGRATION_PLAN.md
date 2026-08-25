@@ -522,6 +522,11 @@ worker. Рання API surface не має event buffer, `Last-Event-ID`, resume
 chunks, `[DONE]` після successful terminal або transport close за failure /
 cancellation; keepalive і timeout policy належать клієнту чи його proxy.
 
+Interactive `stream_options.include_usage=true` додає рівно один фінальний
+exact usage chunk перед `[DONE]`. За absent або `false` usage chunk не
+додається; за failure/cancellation він не синтезується. Інші `stream_options`
+не підтримуються і відхиляються до початку SSE, без неявного ignore.
+
 SSE adapter утримує лише bounded buffer між worker events і client socket. Якщо
 slow client вичерпує цю межу, API скасовує worker request і завершує stream;
 він не блокує worker FIFO, не накопичує unbounded RAM і не відкидає окремі
@@ -578,6 +583,9 @@ Mock backend з `test-support` генерує детерміновані под�
   partial stream, не normal `finish_reason="stop"`.
 - Worker/model failure до першого SSE content byte повертає typed HTTP error,
   а не `200` SSE error event або порожній successful `[DONE]` response.
+- Interactive `stream_options.include_usage=true` додає рівно один фінальний
+  exact usage chunk перед `[DONE]`; absent/`false` не змінює stream, а
+  failure/cancellation не створює synthetic usage chunk.
 - Один request має рівно один terminal event; content events мають строго
   зростаючу sequence і не повторюються після cancellation/error.
 - UTF-8 boundary tests покривають split scalar і tool JSON; heartbeat frames
