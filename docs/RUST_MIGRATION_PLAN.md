@@ -530,6 +530,11 @@ stream без synthetic Chat Completion terminal, SSE error event або `[DONE]
 Клієнт бачить interrupted partial stream; API не підміняє failure нормальним
 `finish_reason="stop"` і не стверджує successful completion.
 
+Якщо worker/model failure стається до першого SSE content byte, API не відкриває
+stream і повертає звичайний typed HTTP error із відповідним status. Ранній
+failure не кодується як `200` SSE error event або порожній successful `[DONE]`
+response.
+
 `GET /v1/models` повертає лише active ready worker model generation. Коли
 worker не ready, unavailable або не має current descriptor, endpoint повертає
 typed `503 model_unavailable`; API не показує empty list, last-known descriptor
@@ -567,6 +572,8 @@ Mock backend з `test-support` генерує детерміновані под�
 - Worker/model failure після першого SSE content chunk закриває stream без
   synthetic terminal, SSE error event або `[DONE]`; клієнт бачить interrupted
   partial stream, не normal `finish_reason="stop"`.
+- Worker/model failure до першого SSE content byte повертає typed HTTP error,
+  а не `200` SSE error event або порожній successful `[DONE]` response.
 - Один request має рівно один terminal event; content events мають строго
   зростаючу sequence і не повторюються після cancellation/error.
 - UTF-8 boundary tests покривають split scalar, tool JSON і heartbeats.
