@@ -1,4 +1,5 @@
 import Foundation
+import TurboFieldfare
 
 public struct ServerArguments: Equatable, Sendable {
     public let model: String
@@ -7,19 +8,77 @@ public struct ServerArguments: Equatable, Sendable {
     public let maxContext: Int
     public let queueLimit: Int
     public let promptCacheMode: ServerPromptCacheMode
+    public let expertCacheSlots: Int
+    public let expertCachePolicy: RuntimeExpertCachePolicy
+    public let prefillPolicy: RuntimePrefillPolicy
+    public let prefillChunkTokens: Int
+    public let rdadvisePolicy: RDAdvicePolicyMode
+    public let visionPack: String?
+    public let visionResidency: VisionResidencyPolicy
 
     public static let usage = """
     usage: TurboFieldfareServer --model <completed .gturbo directory> [options]
 
-      --model <dir>          Required model directory.
-      --port <1...65535>     Loopback port (default 8080).
-      --model-id <id>        API model identifier (default gemma-4-26b-a4b-it).
-      --max-context <tokens> 4096, 8192, 16384, 32768, or 65536 (default 16384).
-      --queue-limit <count>  Maximum queued requests (default 4).
+      --model <dir>              Required model directory.
+      --vision-pack <dir>        Vision companion pack (default beside text model).
+      --vision-residency <on-demand|keep-ready>
+                                 Routed-expert residency during vision (default on-demand).
+      --port <1...65535>         Loopback port (default 8080).
+      --model-id <id>            API model identifier (default gemma-4-26b-a4b-it).
+      --max-context <tokens>     4096, 8192, 16384, 32768, or 65536 (default 16384).
+      --queue-limit <count>      Maximum queued requests (default 4).
       --prompt-cache-mode <off|single-prefix>
-                             Prompt KV reuse mode (default single-prefix).
-      --help                 Show this help.
+                                 Prompt KV reuse mode (default single-prefix).
+      --expert-cache-slots <n>   Expert-cache slots: \(RuntimeConfiguration.allowedValueList(RuntimeConfiguration.allowedExpertCacheSlots)) (default 16).
+      --expert-cache-policy <s>  Expert-cache policy: lfu or lru (default lfu).
+      --prefill on|off           Enable or disable chunked prompt prefill (default on).
+                                 Chunked prefill requires 16 or more cache slots.
+      --prefill-chunk-tokens <n|auto>
+                                 Prefill chunk size: \(RuntimeConfiguration.allowedValueList(RuntimeConfiguration.allowedPrefillChunkTokens, alsoAccepting: ["auto"]))
+                                 (default 128). Each chunk re-reads the routed
+                                 expert pool, so larger chunks read less; auto
+                                 runs at the cap, 256, which prefills every
+                                 prompt in the same spans a per-request size
+                                 would. Prefill scratch is sized from the chunk,
+                                 so the cap holds about 32.5 MB of it against
+                                 16.4 MB at 128.
+      --rdadvise <s>             Read-advice policy: off, default, bounded, or adaptive
+                                 (default off).
+      --help                     Show this help.
     """
+
+    // Mirrors the CLI's runtime flags so both binaries accept the same options
+    // with the same validation, instead of the server pinning production
+    // defaults. RuntimeConfiguration traps on unsupported values, so every
+    // bound is checked here before the initializer runs.
+    public func resolvedRuntimeConfiguration(
+        forceLogitsHead: Bool = true
+    ) throws -> RuntimeConfiguration {
+        guard RuntimeConfiguration.allowedExpertCacheSlots.contains(expertCacheSlots) else {
+            throw ServerArgumentError.notAllowed(
+                flag: "--expert-cache-slots",
+                allowed: RuntimeConfiguration.allowedExpertCacheSlots)
+        }
+        guard RuntimeConfiguration.allowedPrefillChunkTokens.contains(prefillChunkTokens) else {
+            throw ServerArgumentError.notAllowed(
+                flag: "--prefill-chunk-tokens",
+                allowed: RuntimeConfiguration.allowedPrefillChunkTokens,
+                alsoAccepting: ["auto"])
+        }
+        guard prefillPolicy == .off
+                || expertCacheSlots >= RuntimeConfiguration.minimumExpertCacheSlotsForChunkedPrefill
+        else {
+            throw ServerArgumentError.invalid(
+                "--expert-cache-slots \(expertCacheSlots) requires --prefill off")
+        }
+        return RuntimeConfiguration(
+            expertCacheSlots: expertCacheSlots,
+            expertCachePolicy: expertCachePolicy,
+            rdadvisePolicy: rdadvisePolicy,
+            prefillEnabled: prefillPolicy == .chunked,
+            prefillChunkTokens: prefillChunkTokens,
+            forceLogitsHead: forceLogitsHead)
+    }
 
     public static func parse(_ input: [String]) throws -> ServerArguments {
         var model: String?
@@ -28,6 +87,13 @@ public struct ServerArguments: Equatable, Sendable {
         var maxContext = 16_384
         var queueLimit = 4
         var promptCacheMode: ServerPromptCacheMode = .singlePrefix
+        var visionPack: String?
+        var visionResidency: VisionResidencyPolicy = .onDemand
+        var expertCacheSlots = 16
+        var expertCachePolicy = RuntimeExpertCachePolicy.lfu
+        var prefillPolicy = RuntimePrefillPolicy.chunked
+        var prefillChunkTokens = 128
+        var rdadvisePolicy = RDAdvicePolicyMode.off
         var index = 0
         while index < input.count {
             let flag = input[index]
@@ -67,6 +133,61 @@ public struct ServerArguments: Equatable, Sendable {
                         "--prompt-cache-mode must be off or single-prefix")
                 }
                 promptCacheMode = parsed
+            case "--vision-pack":
+                visionPack = value
+            case "--vision-residency":
+                guard let parsed = VisionResidencyPolicy(rawValue: value) else {
+                    throw ServerArgumentError.invalid(
+                        "--vision-residency must be on-demand or keep-ready")
+                }
+                visionResidency = parsed
+            case "--expert-cache-slots":
+                guard let parsed = Int(value),
+                      RuntimeConfiguration.allowedExpertCacheSlots.contains(parsed) else {
+                    throw ServerArgumentError.notAllowed(
+                        flag: flag,
+                        allowed: RuntimeConfiguration.allowedExpertCacheSlots)
+                }
+                expertCacheSlots = parsed
+            case "--expert-cache-policy":
+                guard let parsed = RuntimeExpertCachePolicy(rawValue: value) else {
+                    throw ServerArgumentError.invalid("--expert-cache-policy must be lfu or lru")
+                }
+                expertCachePolicy = parsed
+            case "--prefill":
+                switch value {
+                case "on": prefillPolicy = .chunked
+                case "off": prefillPolicy = .off
+                default: throw ServerArgumentError.invalid("--prefill must be on or off")
+                }
+            case "--prefill-chunk-tokens":
+                // `auto` is an alias for the cap here, and nothing downstream
+                // learns it was spelled that way. A per-request size is the
+                // smallest allowed size that covers the span, so the cap
+                // prefills every prompt in exactly the spans that size would,
+                // and the KV ring is sized from the cap either way. The prefill
+                // scratch is the one thing a per-request size changes: it is
+                // allocated from the chunk, about 125.5 KB per token over a
+                // fixed 328 KB, and the
+                // server would reallocate it on every size change.
+                if value == "auto" {
+                    prefillChunkTokens = PrefillRuntimeConfig.maxChunkTokens
+                    break
+                }
+                guard let parsed = Int(value),
+                      RuntimeConfiguration.allowedPrefillChunkTokens.contains(parsed) else {
+                    throw ServerArgumentError.notAllowed(
+                        flag: flag,
+                        allowed: RuntimeConfiguration.allowedPrefillChunkTokens,
+                        alsoAccepting: ["auto"])
+                }
+                prefillChunkTokens = parsed
+            case "--rdadvise":
+                guard let parsed = RDAdvicePolicyMode(rawValue: value) else {
+                    throw ServerArgumentError.invalid(
+                        "--rdadvise must be off, default, bounded, or adaptive")
+                }
+                rdadvisePolicy = parsed
             default:
                 throw ServerArgumentError.invalid("unknown flag: \(flag)")
             }
@@ -77,7 +198,14 @@ public struct ServerArguments: Equatable, Sendable {
                                modelID: modelID,
                                maxContext: maxContext,
                                queueLimit: queueLimit,
-                               promptCacheMode: promptCacheMode)
+                               promptCacheMode: promptCacheMode,
+                               expertCacheSlots: expertCacheSlots,
+                               expertCachePolicy: expertCachePolicy,
+                               prefillPolicy: prefillPolicy,
+                               prefillChunkTokens: prefillChunkTokens,
+                               rdadvisePolicy: rdadvisePolicy,
+                               visionPack: visionPack,
+                               visionResidency: visionResidency)
     }
 }
 
@@ -90,5 +218,14 @@ public enum ServerArgumentError: Error, Equatable, CustomStringConvertible {
         case .help: "help"
         case .invalid(let message): message
         }
+    }
+}
+
+extension ServerArgumentError {
+    static func notAllowed(flag: String,
+                           allowed: [Int],
+                           alsoAccepting aliases: [String] = []) -> ServerArgumentError {
+        .invalid("\(flag) must be "
+            + RuntimeConfiguration.allowedValueList(allowed, alsoAccepting: aliases))
     }
 }

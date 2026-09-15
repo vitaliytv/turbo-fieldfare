@@ -6,8 +6,9 @@ import Synchronization
 import TurboFieldfare
 
 public actor TurboFieldfareHTTPServer {
-    public static let maximumBodyBytes = 1_048_576
+    public static let maximumBodyBytes = StreamingChatRequestBody.maximumWireBytes
     public static let maximumBatchFileBytes = 200 * 1_024 * 1_024
+    public static let maximumConnections = 128
 
     private let group: MultiThreadedEventLoopGroup
     private let modelID: String
@@ -16,6 +17,9 @@ public actor TurboFieldfareHTTPServer {
     private let batches: BatchRegistry
     private let files: BatchFileStore
     private let heartbeatInterval: TimeAmount
+    private let visionCapability: String
+    private let attachmentRoot: URL
+    private let idleTimeout: TimeAmount
     private let childChannels = ChildChannelRegistry()
     private var channel: Channel?
     private var shutdownTask: Task<Void, any Error>?
@@ -24,6 +28,9 @@ public actor TurboFieldfareHTTPServer {
                 queueLimit: Int,
                 backend: any ServerInferenceBackend,
                 heartbeatInterval: TimeAmount = .seconds(5),
+                visionCapability: String = "missing",
+                attachmentRoot: URL = ServerAttachmentDirectory.root,
+                idleTimeout: TimeAmount = .seconds(120),
                 batchOutputDirectory: URL? = nil,
                 group: MultiThreadedEventLoopGroup = .init(numberOfThreads: 1)) {
         self.group = group
@@ -38,6 +45,10 @@ public actor TurboFieldfareHTTPServer {
             _ = try? await files.registerBatchOutput(id, expiresAt: expiresAt)
         }
         self.heartbeatInterval = heartbeatInterval
+        self.visionCapability = visionCapability
+        self.attachmentRoot = attachmentRoot
+        self.idleTimeout = idleTimeout
+        ServerAttachmentDirectory.sweepAbandoned(in: attachmentRoot)
     }
 
     public func start(port: Int) async throws -> Channel {
@@ -47,16 +58,21 @@ public actor TurboFieldfareHTTPServer {
         let batches = self.batches
         let files = self.files
         let heartbeatInterval = self.heartbeatInterval
+        let visionCapability = self.visionCapability
+        let attachmentRoot = self.attachmentRoot
+        let idleTimeout = self.idleTimeout
         let childChannels = self.childChannels
         let bootstrap = ServerBootstrap(group: group)
-            .serverChannelOption(ChannelOptions.backlog, value: 16)
+            .serverChannelOption(ChannelOptions.backlog,
+                                 value: Int32(TurboFieldfareHTTPServer.maximumConnections))
             .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
             .childChannelInitializer { channel in
                 childChannels.insert(channel)
-                return channel.pipeline.configureHTTPServerPipeline(
+                return channel.pipeline.addHandler(IdleStateHandler(readTimeout: idleTimeout)).flatMap {
+                    channel.pipeline.configureHTTPServerPipeline(
                     withPipeliningAssistance: true,
-                    withErrorHandling: true
-                ).flatMap {
+                    withErrorHandling: true)
+                }.flatMap {
                     channel.pipeline.addHandler(ServerHTTPHandler(
                         modelID: modelID,
                         backend: backend,
@@ -64,6 +80,8 @@ public actor TurboFieldfareHTTPServer {
                         batches: batches,
                         files: files,
                         heartbeatInterval: heartbeatInterval,
+                        visionCapability: visionCapability,
+                        attachmentRoot: attachmentRoot,
                         childChannels: childChannels))
                 }
             }
@@ -143,10 +161,17 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
     private let batches: BatchRegistry
     private let files: BatchFileStore
     private let heartbeatInterval: TimeAmount
+    private let visionCapability: String
+    private let attachmentRoot: URL
     private let childChannels: ChildChannelRegistry
     private var head: HTTPRequestHead?
     private var body = ByteBuffer()
     private var oversized = false
+    private var bodyParser: StreamingChatRequestBody?
+    private var bodyError: (any Error)?
+    private var receivedBodyBytes = 0
+    private var discardingUntilClose = false
+    private var inFlightRequests = 0
     private var activeTask: Task<Void, Never>?
 
     init(modelID: String,
@@ -155,6 +180,8 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
          batches: BatchRegistry,
          files: BatchFileStore,
          heartbeatInterval: TimeAmount,
+         visionCapability: String,
+         attachmentRoot: URL,
          childChannels: ChildChannelRegistry) {
         self.modelID = modelID
         self.backend = backend
@@ -162,27 +189,67 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
         self.batches = batches
         self.files = files
         self.heartbeatInterval = heartbeatInterval
+        self.visionCapability = visionCapability
+        self.attachmentRoot = attachmentRoot
         self.childChannels = childChannels
     }
 
     func channelRead(context: ChannelHandlerContext, data: NIOAny) {
         switch unwrapInboundIn(data) {
         case .head(let head):
+            guard !discardingUntilClose else { return }
             self.head = head
             body.clear()
             oversized = false
+            bodyError = nil
+            receivedBodyBytes = 0
+            bodyParser = Self.carriesChatBody(head)
+                ? StreamingChatRequestBody(attachmentRoot: attachmentRoot,
+                                           visionCapability: visionCapability)
+                : nil
         case .body(var part):
-            let limit = head?.uri.split(separator: "?", maxSplits: 1).first == "/v1/files"
+            guard !discardingUntilClose else { return }
+            receivedBodyBytes += part.readableBytes
+            let limit = bodyParser == nil && Self.requestPath(head) == "/v1/files"
                 ? TurboFieldfareHTTPServer.maximumBatchFileBytes
                 : TurboFieldfareHTTPServer.maximumBodyBytes
+            if receivedBodyBytes > limit {
+                head = nil
+                bodyParser = nil
+                discardingUntilClose = true
+                writeError(context, status: .payloadTooLarge,
+                           OpenAIErrorEnvelope(message: "request body is too large", code: "request_too_large"),
+                           closeAfter: true)
+                return
+            }
+            if let parser = bodyParser {
+                guard bodyError == nil else { return }
+                do { try parser.feed(&part) }
+                catch { bodyError = error; bodyParser = nil }
+                return
+            }
             if body.readableBytes + part.readableBytes > limit {
                 oversized = true
             } else {
                 body.writeBuffer(&part)
             }
         case .end:
-            guard let head else { return }
+            guard !discardingUntilClose, let head else { return }
             self.head = nil
+            if let parser = bodyParser {
+                bodyParser = nil
+                do { routeChat(head: head, body: try parser.finish(), context: context) }
+                catch let error as ServerRequestError { writeError(context, status: .badRequest, error.envelope) }
+                catch { writeError(context, status: .badRequest, OpenAIErrorEnvelope(message: "malformed JSON request", code: "invalid_json")) }
+                return
+            }
+            if let bodyError {
+                self.bodyError = nil
+                let error = bodyError as? ServerRequestError
+                writeError(context, status: .badRequest,
+                           error?.envelope ?? OpenAIErrorEnvelope(message: "malformed JSON request", code: "invalid_json"))
+                return
+            }
             if oversized {
                 writeError(context, status: .payloadTooLarge,
                            OpenAIErrorEnvelope(message: "request body is too large",
@@ -193,9 +260,30 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
         }
     }
 
+    static let chatCompletionsPath = "/v1/chat/completions"
+    static func requestPath(_ head: HTTPRequestHead?) -> String {
+        guard let head else { return "" }
+        return head.uri.split(separator: "?", maxSplits: 1,
+                              omittingEmptySubsequences: false).first.map(String.init) ?? head.uri
+    }
+    static func carriesChatBody(_ head: HTTPRequestHead) -> Bool {
+        head.method == .POST && requestPath(head) == chatCompletionsPath
+            && head.headers.first(name: "content-type")?.lowercased().hasPrefix("application/json") == true
+    }
+
+    func userInboundEventTriggered(context: ChannelHandlerContext, event: Any) {
+        if event is IdleStateHandler.IdleStateEvent, inFlightRequests == 0 {
+            context.close(promise: nil)
+            return
+        }
+        context.fireUserInboundEventTriggered(event)
+    }
+
     func channelInactive(context: ChannelHandlerContext) {
         activeTask?.cancel()
         activeTask = nil
+        bodyParser = nil
+        bodyError = nil
         childChannels.remove(context.channel)
         context.fireChannelInactive()
     }
@@ -207,24 +295,20 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                                   omittingEmptySubsequences: false).first.map(String.init) ?? head.uri
         switch (head.method, path) {
         case (.GET, "/health"):
-            writeJSON(context, status: .ok, object: ["status": "ok"])
+            writeJSON(context, status: .ok, object: ["status": "ok", "vision": visionCapability])
         case (.GET, "/v1/models"):
             let response = OpenAIModelList(
                 object: "list",
                 data: [.init(id: modelID,
                              object: "model",
                              created: 0,
-                             ownedBy: "turbofieldfare")])
+                             ownedBy: "turbofieldfare",
+                             capabilities: visionCapability == "ready" ? ["text", "image"] : ["text"])])
             writeCodable(context, status: .ok, response)
         case (.POST, "/v1/chat/completions"):
-            guard head.headers.first(name: "content-type")?
-                .lowercased().hasPrefix("application/json") == true else {
-                writeError(context, status: .unsupportedMediaType,
-                           OpenAIErrorEnvelope(message: "content-type must be application/json",
-                                               code: "unsupported_media_type"))
-                return
-            }
-            handleCompletion(body: body, context: context)
+            writeError(context, status: .unsupportedMediaType,
+                       OpenAIErrorEnvelope(message: "content-type must be application/json",
+                                           code: "unsupported_media_type"))
         case (.POST, "/v1/batches"):
             guard head.headers.first(name: "content-type")?
                 .lowercased().hasPrefix("application/json") == true else {
@@ -266,6 +350,19 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                        OpenAIErrorEnvelope(message: "route not found",
                                            code: "not_found"))
         }
+    }
+
+    private func routeChat(head: HTTPRequestHead,
+                           body: ParsedChatRequestBody,
+                           context: ChannelHandlerContext) {
+        guard head.headers.first(name: "content-type")?.lowercased()
+            .hasPrefix("application/json") == true else {
+            writeError(context, status: .unsupportedMediaType,
+                       OpenAIErrorEnvelope(message: "content-type must be application/json",
+                                           code: "unsupported_media_type"))
+            return
+        }
+        handleCompletion(body: body, context: context)
     }
 
     private func handleBatchJob(body: ByteBuffer, context: ChannelHandlerContext) {
@@ -524,12 +621,13 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
         activeTask = childChannels.startTask { guard let batch = await self.batches.cancel(id) else { self.writeError(box.value, status: .notFound, OpenAIErrorEnvelope(message: "batch not found", code: "not_found")); return }; self.writeCodable(box.value, status: .ok, batch) }
     }
 
-    private func handleCompletion(body: ByteBuffer,
+    private func handleCompletion(body: ParsedChatRequestBody,
                                   context: ChannelHandlerContext) {
         do {
-            let bytes = body.getBytes(at: body.readerIndex, length: body.readableBytes) ?? []
-            let decoded = try JSONDecoder().decode(OpenAIChatRequest.self, from: Data(bytes))
-            let request = try OpenAIRequestValidator.validate(decoded, modelID: modelID)
+            let decoded = try JSONDecoder().decode(OpenAIChatRequest.self, from: body.json)
+            let request = try OpenAIRequestValidator.validate(
+                decoded, modelID: modelID, preStagedImages: body.stagedImages,
+                attachmentLease: body.lease)
             let responseID = "chatcmpl-" + UUID().uuidString.lowercased().replacingOccurrences(of: "-", with: "")
             let created = Int(Date().timeIntervalSince1970)
             let contextBox = SendableContext(context)
@@ -554,8 +652,10 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
                 ServerLog.queued(id: responseID)
                 startStream()
             }
+            inFlightRequests += 1
             activeTask = childChannels.startTask {
                 defer { streamState.stop() }
+                defer { contextBox.value.eventLoop.execute { self.inFlightRequests -= 1 } }
                 let started = ContinuousClock.now
                 ServerLog.accepted(id: responseID, streaming: request.stream)
                 do {
@@ -841,8 +941,10 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
 
     private func writeError(_ context: ChannelHandlerContext,
                             status: HTTPResponseStatus,
-                            _ error: OpenAIErrorEnvelope) {
-        writeCodable(context, status: status, error)
+                            _ error: OpenAIErrorEnvelope,
+                            closeAfter: Bool = false) {
+        guard let data = try? JSONEncoder().encode(error) else { return }
+        writeData(context, status: status, data: data, closeAfter: closeAfter)
     }
 
     private func writeJSON(_ context: ChannelHandlerContext,
@@ -854,19 +956,33 @@ private final class ServerHTTPHandler: ChannelInboundHandler, @unchecked Sendabl
 
     private func writeData(_ context: ChannelHandlerContext,
                            status: HTTPResponseStatus,
-                           data: Data) {
+                           data: Data,
+                           closeAfter: Bool = false) {
         let contextBox = SendableContext(context)
         context.eventLoop.execute {
             var headers = HTTPHeaders()
             headers.add(name: "content-type", value: "application/json")
             headers.add(name: "content-length", value: "\(data.count)")
+            if closeAfter {
+                headers.add(name: "connection", value: "close")
+            }
             contextBox.value.write(self.wrapOutboundOut(.head(
                 HTTPResponseHead(version: .http1_1, status: status, headers: headers))),
                 promise: nil)
             var buffer = contextBox.value.channel.allocator.buffer(capacity: data.count)
             buffer.writeBytes(data)
             contextBox.value.write(self.wrapOutboundOut(.body(.byteBuffer(buffer))), promise: nil)
-            contextBox.value.writeAndFlush(self.wrapOutboundOut(.end(nil)), promise: nil)
+            if closeAfter {
+                let promise = contextBox.value.eventLoop.makePromise(of: Void.self)
+                promise.futureResult.whenComplete { _ in
+                    _ = contextBox.value.channel.eventLoop.scheduleTask(in: .seconds(2)) {
+                        contextBox.value.channel.close(promise: nil)
+                    }
+                }
+                contextBox.value.writeAndFlush(self.wrapOutboundOut(.end(nil)), promise: promise)
+            } else {
+                contextBox.value.writeAndFlush(self.wrapOutboundOut(.end(nil)), promise: nil)
+            }
         }
     }
 
@@ -939,6 +1055,9 @@ private final class ChildChannelRegistry: Sendable {
     func insert(_ channel: Channel) {
         let shouldClose = state.withLock {
             guard !$0.shuttingDown else { return true }
+            guard $0.channels.count < TurboFieldfareHTTPServer.maximumConnections else {
+                return true
+            }
             $0.channels[ObjectIdentifier(channel)] = channel
             return false
         }

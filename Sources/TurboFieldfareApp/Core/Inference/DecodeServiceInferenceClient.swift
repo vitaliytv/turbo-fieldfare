@@ -14,17 +14,124 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
         var socketPath: String?
     }
 
+    /// How long a wait for a service event may go quiet before the connection
+    /// is declared dead. A load is bounded by the model, not by the protocol,
+    /// so it gets the long one; generation events include prefill progress and
+    /// per-token snapshots, so silence there means something is wrong.
+    public static let loadTimeout: Duration = .seconds(900)
+    public static let generationTimeout: Duration = .seconds(300)
+    /// A reset does no model work, but it queues behind the service's serial
+    /// command loop. The app blocks New chat during a run, so this only has to
+    /// cover a load or a teardown finishing, not a whole generation.
+    public static let conversationResetTimeout: Duration = .seconds(60)
+    /// Restore prefills the whole conversation, including its images. It needs
+    /// a longer silence deadline than reset, but cannot wait forever if the
+    /// service stops answering.
+    public static let conversationRestoreTimeout: Duration = .seconds(1_800)
+
     private let connection = Mutex(Connection())
     private let serviceURL: URL
+    private let testConnection: (@Sendable () throws -> (input: FileHandle, output: FileHandle))?
     private let inferenceMemory = Mutex<UInt64?>(nil)
+    private let inferenceTowerMemory = Mutex<UInt64?>(nil)
     public let generationTranscriptMailbox = GenerationTranscriptMailbox()
 
     public var currentInferenceMemoryBytes: UInt64? {
         inferenceMemory.withLock { $0 }
     }
 
+    public var currentInferenceTowerBytes: UInt64? {
+        inferenceTowerMemory.withLock { $0 }
+    }
+
     public init(serviceURL: URL? = nil) {
         self.serviceURL = serviceURL ?? Self.defaultServiceURL()
+        self.testConnection = nil
+        DecodeUnixSocket.ignoreSIGPIPEProcessWide()
+    }
+
+    init(testInput: FileHandle, responseOutput: FileHandle) {
+        self.serviceURL = Self.defaultServiceURL()
+        self.testConnection = nil
+        DecodeUnixSocket.ignoreSIGPIPEProcessWide()
+        let responses = makeRouter(output: responseOutput)
+        connection.withLock {
+            $0.input = testInput
+            $0.responses = responses
+        }
+    }
+
+    var connectionIsInstalled: Bool {
+        connection.withLock { $0.input != nil && $0.responses != nil }
+    }
+
+    init(testConnection: @escaping @Sendable () throws -> (input: FileHandle, output: FileHandle)) {
+        self.serviceURL = Self.defaultServiceURL()
+        self.testConnection = testConnection
+        DecodeUnixSocket.ignoreSIGPIPEProcessWide()
+    }
+
+    var installedRouter: DecodeServiceResponseRouter? {
+        connection.withLock { $0.responses }
+    }
+
+    private func invalidateConnection(
+        expecting router: DecodeServiceResponseRouter? = nil
+    ) {
+        let dead = connection.withLock { state -> Connection? in
+            if let router, state.responses !== router { return nil }
+            defer { state = Connection() }
+            return state
+        }
+        guard let dead else { return }
+        guard dead.input != nil || dead.launchLabel != nil else { return }
+        let ownsService = dead.launchLabel != nil
+        if let input = dead.input {
+            if ownsService {
+                try? input.write(contentsOf: DecodeFrameCodec.encode(
+                    DecodeServiceCommand.shutdown))
+            }
+            try? input.close()
+        }
+        dead.responses?.closeStream()
+        if ownsService {
+            if let label = dead.launchLabel { Self.removeLaunchJob(label: label) }
+            if let socketPath = dead.socketPath { unlink(socketPath) }
+        }
+        inferenceMemory.withLock { $0 = nil }
+        inferenceTowerMemory.withLock { $0 = nil }
+    }
+
+    /// Runs a transport operation, dropping the connection if it fails.
+    /// Generation-level failures reported *by* the service are ordinary events
+    /// and never reach here; only a broken transport does.
+    private func transport<T>(expecting responses: DecodeServiceResponseRouter,
+                              _ body: () async throws -> T) async throws -> T {
+        do {
+            return try await body()
+        } catch is CancellationError {
+            // A caller that stopped listening, not a broken transport. Tearing
+            // the connection down here would make an abandoned stream cost a
+            // service relaunch and a full reload; `ensureLoaded` treats its own
+            // cancellation the same way.
+            throw CancellationError()
+        } catch {
+            invalidateConnection(expecting: responses)
+            if let appError = error as? AppInferenceError { throw appError }
+            throw AppInferenceError.connectionLost(String(describing: error))
+        }
+    }
+
+    private func write(_ command: DecodeServiceCommand,
+                       to input: FileHandle,
+                       expecting responses: DecodeServiceResponseRouter) throws {
+        do {
+            try input.write(contentsOf: DecodeFrameCodec.encode(command))
+        } catch {
+            invalidateConnection(expecting: responses)
+            throw AppInferenceError.connectionLost(
+                "could not write a request: \(error)")
+        }
     }
 
     public func ensureLoaded(modelDirectory: URL, maxContextTokens: Int,
@@ -38,9 +145,23 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
             modelPath: modelDirectory.path, maxContextTokens: maxContextTokens,
             runtimeOptions: Self.decodeRuntimeOptions(options),
             forceLogitsHead: forceLogitsHead)
-        try handles.input.write(contentsOf: DecodeFrameCodec.encode(
-            DecodeServiceCommand.load(request)))
-        let event = try await handles.responses.next(matching: request.requestID)
+        try write(.load(request), to: handles.input, expecting: handles.responses)
+        let event: DecodeServiceEvent
+        do {
+            event = try await handles.responses.next(
+                matching: request.requestID, timeout: Self.loadTimeout)
+        } catch is CancellationError {
+            // The service runs commands serially, so an abandoned load would
+            // block every later command including the unload the UI is waiting
+            // on. Tell it to stop; the connection stays usable.
+            try? write(.cancel, to: handles.input, expecting: handles.responses)
+            throw CancellationError()
+        } catch {
+            invalidateConnection(expecting: handles.responses)
+            if let appError = error as? AppInferenceError { throw appError }
+            throw AppInferenceError.connectionLost(
+                "the decode service ended during model load: \(error)")
+        }
         switch event.kind {
         case .ready:
             break
@@ -52,6 +173,7 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
                 "decode service returned \(event.kind.rawValue) for a load request")
         }
         inferenceMemory.withLock { $0 = event.currentMemoryBytes }
+        inferenceTowerMemory.withLock { $0 = event.visionTowerMappedBytes }
         connection.withLock { $0.loadedDirectory = modelDirectory.standardizedFileURL }
         onState(.ready(modelDirectory: modelDirectory, loadSeconds: 0))
     }
@@ -59,12 +181,12 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
     public func unload() async {
         guard let handles = currentHandles() else { return }
         let requestID = UUID()
-        try? handles.input.write(contentsOf: DecodeFrameCodec.encode(
-            DecodeServiceCommand.unload(requestID)))
+        try? write(.unload(requestID), to: handles.input, expecting: handles.responses)
         guard let event = try? await handles.responses.next(matching: requestID),
               event.kind == .unloaded else { return }
         connection.withLock { $0.loadedDirectory = nil }
         inferenceMemory.withLock { $0 = nil }
+        inferenceTowerMemory.withLock { $0 = nil }
     }
 
     public func generate(_ request: AppGenerationRequest)
@@ -79,23 +201,53 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
                     let generationID = UUID()
                     generationTranscriptMailbox.reset()
                     let command = DecodeGenerationRequest(
-                        prompt: request.prompt, maxNewTokens: request.maxNewTokens,
+                        prompt: request.prompt,
+                        imageAttachments: request.imageAttachments.map {
+                            DecodeImageAttachment(
+                                id: $0.id,
+                                path: $0.fileURL.path,
+                                displayName: $0.displayName,
+                                encodedBytes: $0.encodedBytes,
+                                sha256: $0.sha256)
+                        },
+                        maxNewTokens: request.maxNewTokens,
                         maxContextTokens: request.maxContextTokens,
                         temperature: request.temperature,
+                        topK: request.topK,
+                        topP: request.topP,
                         repetitionPenalty: request.repetitionPenalty,
                         runtimeOptions: Self.decodeRuntimeOptions(request.runtimeOptions),
-                        generationID: generationID)
-                    try handles.input.write(contentsOf: DecodeFrameCodec.encode(
-                        DecodeServiceCommand.generate(command)))
+                        generationID: generationID,
+                        conversationEpoch: request.conversationEpoch,
+                        turnIndex: request.turnIndex)
+                    try write(.generate(command), to: handles.input,
+                              expecting: handles.responses)
 
                     var expectedSequence: UInt64 = 1
                     var lastMetricYield = Date.distantPast
                     var hasYieldedVisibleText = false
                     while true {
-                        let event = try await handles.responses.next(matching: generationID)
-                        inferenceMemory.withLock { $0 = event.currentMemoryBytes }
+                        let event = try await transport(expecting: handles.responses) {
+                            try await handles.responses.next(
+                                matching: generationID, timeout: Self.generationTimeout)
+                        }
+                        // Only when the event carries a figure: an event
+                        // without one says nothing about memory, and clearing
+                        // the last reading made the display flicker to empty.
+                        if let bytes = event.currentMemoryBytes {
+                            inferenceMemory.withLock { $0 = bytes }
+                        }
+                        if let tower = event.visionTowerMappedBytes {
+                            inferenceTowerMemory.withLock { $0 = tower }
+                        }
                         guard event.generationID == generationID else { continue }
 
+                        if event.kind == .memory {
+                            // The stored reading is not observed by the UI, so
+                            // yield an event that causes it to redraw.
+                            continuation.yield(.memorySample)
+                            continue
+                        }
                         if event.kind == .prefill || event.kind == .snapshot {
                             guard event.sequence == expectedSequence else {
                                 throw AppInferenceError.unknown(
@@ -140,6 +292,15 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
                                 event.error ?? "decode service failed")
                             continuation.yield(.failed(error, partial: diagnostics))
                             continuation.finish(throwing: error)
+                        case .lineageLost:
+                            // Carried across as its own case, not flattened into
+                            // `.unknown`: the app has to clear the conversation
+                            // rather than offer a retry that would fail the same
+                            // way every time.
+                            let error = AppInferenceError.conversationLineageLost(
+                                event.error ?? "the conversation's KV no longer matches it")
+                            continuation.yield(.failed(error, partial: diagnostics))
+                            continuation.finish(throwing: error)
                         default:
                             continue
                         }
@@ -156,29 +317,135 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
         }
     }
 
+    /// Opens `epoch` on the service and waits for it to say so.
+    ///
+    /// Not fire-and-forget: the app numbers the next turn from zero the moment
+    /// this returns, and a turn numbered against a reset the service never
+    /// applied is refused by its gate — which is the safe outcome, but the user
+    /// sees a rejected message instead of a new chat.
+    public func resetConversation(epoch: UUID) async throws {
+        guard let handles = currentHandles() else {
+            // Not "nothing is loaded" — `currentHandles` is nil when the
+            // *connection* is gone. Returning normally let the caller record an
+            // epoch the service had never heard of, and because it then matched
+            // the app's own, the reset was never retried: every later turn was
+            // refused and no recovery path could fire. And the class the
+            // transport uses for the same loss, so the app marks the model as
+            // needing a reload rather than showing a generic failure with no
+            // Retry Load behind it.
+            throw AppInferenceError.connectionLost(
+                "the decode service connection is gone; the new chat was not opened")
+        }
+        let requestID = UUID()
+        try write(.resetConversation(
+            DecodeResetConversationRequest(epoch: epoch, requestID: requestID)),
+            to: handles.input, expecting: handles.responses)
+        let event = try await transport(expecting: handles.responses) {
+            try await handles.responses.next(
+                matching: requestID, timeout: Self.conversationResetTimeout)
+        }
+        guard event.kind == .conversationReset else {
+            throw AppInferenceError.unknown(
+                event.error ?? "decode service refused to start a new conversation")
+        }
+    }
+
+    /// Replays a stored conversation onto the service and waits for it to say
+    /// the KV holds it.
+    ///
+    /// Bounded and cancellable like `resetConversation`, but on its own
+    /// deadline: a reset drops a cache, while this one prefills a whole
+    /// conversation — minutes at 8K on the reference Mac. Sharing the reset's
+    /// timeout would abandon every large reopen as a hang.
+    public func restoreConversation(
+        _ lineage: AppConversationLineage,
+        epoch: UUID,
+        options: AppRuntimeOptions,
+        maxContextTokens: Int,
+        onPrefillProgress: @escaping @Sendable (Int, Int) -> Void
+    ) async throws -> Int {
+        guard let handles = currentHandles() else {
+            // The service died while idle and the router tore the connection
+            // down with nothing telling the window. Reported as a refused
+            // replay this ended the held lineage and left the model advertised
+            // as ready; as a lost connection it puts Retry Load on screen.
+            throw AppInferenceError.connectionLost(
+                "the decode service connection is gone")
+        }
+        let requestID = UUID()
+        try write(.restoreConversation(DecodeRestoreConversationRequest(
+            epoch: epoch,
+            tokenIDs: lineage.tokenIDs,
+            images: lineage.images.map {
+                DecodeReplayImage(
+                    tokenLowerBound: $0.tokenLowerBound,
+                    tokenCount: $0.tokenCount,
+                    path: $0.fileURL.path,
+                    expectedDigest: $0.expectedDigest)
+            },
+            boundaryTokenIDs: lineage.boundaryTokenIDs,
+            boundaryNeedsReplay: lineage.boundaryNeedsReplay,
+            committedTurns: lineage.committedTurns,
+            maxContextTokens: maxContextTokens,
+            runtimeOptions: Self.decodeRuntimeOptions(options),
+            requestID: requestID)), to: handles.input, expecting: handles.responses)
+        while true {
+            let event = try await transport(expecting: handles.responses) {
+                try await handles.responses.next(
+                    matching: requestID, timeout: Self.conversationRestoreTimeout)
+            }
+            if let bytes = event.currentMemoryBytes {
+                inferenceMemory.withLock { $0 = bytes }
+            }
+            switch event.kind {
+            case .prefill:
+                if let done = event.prefillDone, let total = event.prefillTotal {
+                    onPrefillProgress(done, total)
+                }
+            case .memory:
+                continue
+            case .conversationRestored:
+                // The service's count, not the lineage's length. They agree when
+                // the replay did what the record said, and when they do not it
+                // is the KV that decides what the next turn resumes onto.
+                guard let tokens = event.conversationTokenCount else {
+                    throw AppInferenceError.conversationRestoreFailed(
+                        "the decode service restored a conversation without saying "
+                            + "how many tokens it holds")
+                }
+                return tokens
+            default:
+                throw AppInferenceError.conversationRestoreFailed(
+                    event.error ?? "the decode service refused to reopen this chat")
+            }
+        }
+    }
+
     public func cancel() {
-        guard let input = currentHandles()?.input else { return }
-        try? input.write(contentsOf: DecodeFrameCodec.encode(
-            DecodeServiceCommand.cancel))
+        guard let handles = currentHandles() else { return }
+        try? write(.cancel, to: handles.input, expecting: handles.responses)
+    }
+
+    public func shutdownForTermination() {
+        invalidateConnection()
     }
 
     deinit {
-        let state = connection.withLock { value -> Connection in
-            defer { value = Connection() }
-            return value
-        }
-        if let input = state.input {
-            try? input.write(contentsOf: DecodeFrameCodec.encode(
-                DecodeServiceCommand.shutdown))
-            try? input.close()
-        }
-        if let label = state.launchLabel { Self.removeLaunchJob(label: label) }
-        if let socketPath = state.socketPath { unlink(socketPath) }
+        invalidateConnection()
     }
 
     private func ensureProcess() throws
         -> (input: FileHandle, responses: DecodeServiceResponseRouter) {
         if let handles = currentHandles() { return handles }
+        if let testConnection {
+            let handles = try testConnection()
+            let responses = makeRouter(output: handles.output)
+            connection.withLock {
+                $0.input = handles.input
+                $0.responses = responses
+            }
+            return (handles.input, responses)
+        }
         return try launchIndependentService()
     }
 
@@ -229,11 +496,36 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
             throw AppInferenceError.modelLoadFailed(message)
         }
 
+        // Demand the job without restarting a RunAtLoad winner; the socket is
+        // authoritative. `bootstrap` alone does not always leave the job
+        // running, and the failure then looked like a socket timeout with no
+        // indication that launchd was the cause.
+        var kickstartError: String?
+        do {
+            let starter = Process()
+            let starterErrors = Pipe()
+            starter.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+            starter.arguments = Self.kickstartArguments(uid: getuid(), label: label)
+            starter.standardOutput = FileHandle.nullDevice
+            starter.standardError = starterErrors
+            try starter.run()
+            starter.waitUntilExit()
+            if starter.terminationStatus != 0 {
+                let data = try? starterErrors.fileHandleForReading.readToEnd()
+                let detail = data.flatMap { String(data: $0, encoding: .utf8) }?
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                kickstartError = detail.flatMap { $0.isEmpty ? nil : $0 }
+                    ?? "exit status \(starter.terminationStatus)"
+            }
+        } catch {
+            kickstartError = String(describing: error)
+        }
+
         var lastError: Error?
         for _ in 0..<200 {
             do {
                 let handles = try DecodeUnixSocket.connect(path: socketPath)
-                let responses = DecodeServiceResponseRouter(output: handles.output)
+                let responses = makeRouter(output: handles.output)
                 connection.withLock {
                     $0.input = handles.input
                     $0.responses = responses
@@ -248,34 +540,75 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
         }
         Self.removeLaunchJob(label: label)
         throw AppInferenceError.modelLoadFailed(
-            "decode service socket did not become ready: \(lastError.map(String.init(describing:)) ?? "unknown error")")
+            Self.socketFailureMessage(
+                socketError: lastError.map(String.init(describing:)),
+                kickstartError: kickstartError))
+    }
+
+    /// `kickstart` demands the job; it deliberately omits `-k`, which would
+    /// restart a job that a RunAtLoad bootstrap already won. The socket is what
+    /// decides readiness, so restarting a healthy service would only lose it.
+    static func kickstartArguments(uid: uid_t, label: String) -> [String] {
+        ["kickstart", "gui/\(uid)/\(label)"]
+    }
+
+    /// The socket timeout stays the primary diagnostic, because that is what the
+    /// caller actually observed; a launchctl failure is appended when there was
+    /// one, since it usually explains the timeout.
+    static func socketFailureMessage(socketError: String?, kickstartError: String?)
+        -> String {
+        let kickstartDetail = kickstartError.map {
+            "; launchctl kickstart failed: \($0)"
+        } ?? ""
+        return "decode service socket did not become ready: \(socketError ?? "unknown error")\(kickstartDetail)"
     }
 
     private func currentHandles()
         -> (input: FileHandle, responses: DecodeServiceResponseRouter)? {
-        connection.withLock { state in
+        let handles = connection.withLock { state
+            -> (input: FileHandle, responses: DecodeServiceResponseRouter)? in
             guard let input = state.input, let responses = state.responses else {
                 return nil
             }
             return (input, responses)
+        }
+        guard let handles else { return nil }
+        if handles.responses.isTerminated {
+            invalidateConnection(expecting: handles.responses)
+            return nil
+        }
+        return handles
+    }
+
+    private func makeRouter(output: FileHandle) -> DecodeServiceResponseRouter {
+        DecodeServiceResponseRouter(output: output) { [weak self] router, _ in
+            self?.invalidateConnection(expecting: router)
         }
     }
 
     private static func diagnostics(_ event: DecodeServiceEvent,
                                     options: AppRuntimeOptions) -> AppDiagnostics {
         let stop = AppStopReason(rawValue: event.stopReason ?? "")
-            ?? (event.kind == .cancelled
-                ? .cancelled
-                : event.kind == .failed ? .failed : .maxTokens)
+            ?? (event.kind == .cancelled ? .cancelled
+                : (event.kind == .failed || event.kind == .lineageLost) ? .failed
+                : .maxTokens)
         return AppDiagnostics(
             generatedTokens: event.tokenCount,
             stopReason: stop,
             promptTokenCount: event.promptTokenCount,
+            cachedPromptTokens: event.cachedPromptTokens,
+            computedPrefillTokens: event.computedPrefillTokens,
+            conversationTokens: event.conversationTokenCount,
+            promptTokenIDs: event.promptTokenIDs,
+            generatedTokenIDs: event.generatedTokenIDs,
+            boundaryTokenIDs: event.boundaryTokenIDs,
+            boundaryNeedsReplay: event.boundaryNeedsReplay,
             prefillSeconds: event.prefillSeconds,
             timeToFirstTokenSeconds: event.timeToFirstTokenSeconds,
             decodeSeconds: event.decodeSeconds,
             tokensPerSecond: event.tokensPerSecond,
             peakMemoryBytes: event.peakMemoryBytes,
+            visionTowerMappedBytes: event.visionTowerMappedBytes,
             runtimeOptions: options,
             prefill: prefillDiagnostics(event.prefill, options: options),
             runner: event.runner.map(runnerDiagnostics))
@@ -319,7 +652,8 @@ public final class DecodeServiceInferenceClient: AppModelLifecycleClient,
             prefillEnabled: options.prefillEnabled,
             prefillChunkTokens: options.prefillChunkTokens,
             rdadvisePolicy: options.rdadvisePolicy.rawValue,
-            modelVerification: options.modelVerification.rawValue)
+            modelVerification: options.modelVerification.rawValue,
+            visionResidencyPolicy: options.visionResidencyPolicy.rawValue)
     }
 
     private static func removeLaunchJob(label: String) {
