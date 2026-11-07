@@ -1,10 +1,6 @@
 import Foundation
 
 enum ServerLog {
-    static func promptCacheMiss(reason: ServerPromptCacheMissReason) {
-        write("prompt cache miss reason=\(reason.rawValue)")
-    }
-
     static func accepted(id: String, streaming: Bool) {
         write("request \(id) accepted streaming=\(streaming)")
     }
