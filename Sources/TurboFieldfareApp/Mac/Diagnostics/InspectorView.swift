@@ -94,8 +94,8 @@ struct InspectorView: View {
                     .font(.caption)
                     .foregroundStyle(.orange)
             } else if case .unsupportedLayout = model.visionInstallationStatus {
-                Text("Image support needs a model directory named "
-                    + "“<name>.gturbo”, which is where the companion pack lives.")
+                Text("Image support needs a text model named “<name>.gturbo” "
+                    + "with “<name>.vision.gturbo” beside it.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else if case .failed(let message) = model.visionInstallReadiness,
@@ -227,8 +227,10 @@ struct InspectorView: View {
                     .buttonStyle(.borderless)
                     .help("Copy model path")
                     .accessibilityIdentifier(.inspectorCopyPath)
+                    ModelLocationMenu(model: model)
                 }
             }
+            ModelLocationNotices(model: model)
             if model.canUnloadModel {
                 Button("Unload Model", action: model.unloadModel)
                     .accessibilityIdentifier(.inspectorUnload)
@@ -280,8 +282,6 @@ struct InspectorView: View {
                 }
             }
         }
-        .disabled(model.isRunning || model.isInstallingModel
-            || model.isVisionFilesystemMutationInProgress)
     }
 
     /// The context is settable only through the model, because changing it has
@@ -299,8 +299,10 @@ struct InspectorView: View {
     private var memorySection: some View {
         Section("Memory") {
             LabeledContent("Context") {
+                // Only the sizes this Mac can back. Offering one it cannot
+                // would put a row in the menu that every load then refuses.
                 Picker("Context", selection: contextTokensBinding) {
-                    ForEach(AppContextLengthOption.allCases) { option in
+                    ForEach(model.contextOptions) { option in
                         Text(option.menuLabel).tag(option.tokens)
                     }
                 }
@@ -309,8 +311,17 @@ struct InspectorView: View {
                 .fixedSize()
                 .accessibilityIdentifier(.inspectorContext)
             }
+            // The clamp notice already carries the need it clamped for, so
+            // showing both would print the same sentence twice.
+            if let note = model.contextClampNotice ?? model.contextOptionsNote {
+                Text(note)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             LabeledContent("Slots") {
-                Picker("Slots", selection: $model.runtimeOptions.expertCacheSlots) {
+                Picker("Slots", selection: Binding(
+                    get: { model.runtimeOptions.expertCacheSlots },
+                    set: { model.setExpertCacheSlots($0) })) {
                     ForEach(AppRuntimeOptions.allowedSlotCounts, id: \.self) { slots in
                         Text(AppRuntimeOptions.slotsLabel(for: slots)).tag(slots)
                     }
@@ -378,15 +389,15 @@ struct InspectorView: View {
         Section("Runtime") {
             Toggle("Prefill", isOn: $model.runtimeOptions.prefillEnabled)
                 .accessibilityIdentifier(.inspectorPrefill)
-            VStack(alignment: .leading, spacing: 8) {
-                Text("RDADVISE")
+            LabeledContent("RDADVISE") {
                 Picker("RDADVISE", selection: $model.runtimeOptions.rdadvisePolicy) {
                     ForEach(AppRDAdvicePolicy.allCases) { policy in
                         Text(policy.label).tag(policy)
                     }
                 }
-                .pickerStyle(.segmented)
+                .pickerStyle(.menu)
                 .labelsHidden()
+                .fixedSize()
                 .accessibilityIdentifier(.inspectorRDAdvise)
             }
             Text("RDADVISE is experimental. It may speed up short decodes but slow down long decodes.")

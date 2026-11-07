@@ -12,15 +12,26 @@ public struct ServerCompletion: Equatable, Sendable {
     public let toolCalls: [ParsedToolCall]
     public let finishReason: String
     public let usage: OpenAIUsage
+    /// Wall time the runtime spent prefilling the prompt and decoding the
+    /// completion, as `runRawCompletion` already measures them around those two
+    /// phases; nothing is timed here. Defaulted to zero so a backend that does
+    /// not decode through the runtime — the test doubles, the compatibility
+    /// harness — reports no timing rather than a fabricated one.
+    public let prefillSeconds: Double
+    public let decodeSeconds: Double
 
     public init(content: String,
                 toolCalls: [ParsedToolCall],
                 finishReason: String,
-                usage: OpenAIUsage) {
+                usage: OpenAIUsage,
+                prefillSeconds: Double = 0,
+                decodeSeconds: Double = 0) {
         self.content = content
         self.toolCalls = toolCalls
         self.finishReason = finishReason
         self.usage = usage
+        self.prefillSeconds = prefillSeconds
+        self.decodeSeconds = decodeSeconds
     }
 }
 
@@ -942,14 +953,17 @@ public actor ServerModelSession: ServerInferenceBackend {
                 // the cached prefix is untouched and stays valid for the retry.
                 throw CancellationError()
             } catch {
-                ServerLog.promptCacheBridgeFailed(error: error)
+                ServerLog.promptCacheMiss(reason: .continuationBridgeUnavailable)
                 promptCache.invalidate()
                 let rendered = try await renderMultimodal(request)
                 effectivePromptIDs = rendered.effectiveTokenIDs
                 multimodalInput = rendered
                 completionStart = .reset
             }
-        case .miss:
+        case .miss(let reason):
+            if promptCacheMode == .singlePrefix {
+                ServerLog.promptCacheMiss(reason: reason)
+            }
             promptCache.invalidate()
             if let renderedTextIDs {
                 effectivePromptIDs = renderedTextIDs
@@ -1101,13 +1115,14 @@ public actor ServerModelSession: ServerInferenceBackend {
         // `imagesDiverged` rather than resumed onto a KV built from a different
         // picture.
         if promptCacheMode == .singlePrefix {
-            promptCache.publish(
+            let publication = promptCache.publish(
                 domain: promptCacheDomain,
                 request: request,
                 content: content,
                 calls: calls,
                 result: result,
                 stopStringFiltered: stopMatcher.isStopped)
+            ServerLog.promptCachePublication(publication)
         }
         completed = true
         return ServerCompletion(
@@ -1117,7 +1132,9 @@ public actor ServerModelSession: ServerInferenceBackend {
             usage: OpenAIUsage(promptTokens: result.prefillTokens,
                                completionTokens: result.newTokens,
                                totalTokens: result.prefillTokens + result.newTokens,
-                               cachedTokens: result.cachedPromptTokens))
+                               cachedTokens: result.cachedPromptTokens),
+            prefillSeconds: result.prefillSeconds,
+            decodeSeconds: result.decodeSeconds)
     }
 
     private func renderPrompt(_ request: ValidatedChatRequest) throws -> [Int32] {

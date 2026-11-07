@@ -77,15 +77,19 @@ public struct ResponseMarkdownRenderer: TranscriptBlockRendering {
         let link: URL?
         let imageURL: URL?
         let block: Block
+        var syntheticCodeTerminator = false
     }
 
+    private let typography: ConversationTypography
     private let mathEnabled: Bool
     private let typesetter: any MathTypesetting
 
     public init(
+        typography: ConversationTypography = .init(),
         environment: [String: String] = ProcessInfo.processInfo.environment,
         typesetter: any MathTypesetting = SwiftMathTypesetter()
     ) {
+        self.typography = typography
         mathEnabled = environment["TURBO_FIELDFARE_DISABLE_MATH"] != "1"
         self.typesetter = typesetter
     }
@@ -111,7 +115,8 @@ public struct ResponseMarkdownRenderer: TranscriptBlockRendering {
                 markdown: presentationSource,
                 options: .init(
                     interpretedSyntax: .full,
-                    failurePolicy: .returnPartiallyParsedIfPossible))
+                    failurePolicy: .returnPartiallyParsedIfPossible,
+                    appliesSourcePositionAttributes: true))
             guard !containsUnsupportedBlock(in: parsed) else { return fallback(source) }
 
             let items = Self.completingTables(parsed.runs.map { run in
@@ -125,11 +130,13 @@ public struct ResponseMarkdownRenderer: TranscriptBlockRendering {
                     inlineIntent: run.inlinePresentationIntent,
                     link: Self.openable(run.link),
                     imageURL: Self.openable(run.imageURL),
-                    block: block(for: run.presentationIntent))
+                    block: block(for: run.presentationIntent),
+                    syntheticCodeTerminator: TranscriptCodeBlock.hasSyntheticTerminator(
+                        position: run.markdownSourcePosition, source: presentationSource))
             })
 
             let output = NSMutableAttributedString()
-            let decoration = BlockDecoration()
+            let decoration = BlockDecoration(typography: typography)
             var previousBlock: Block?
             var index = 0
             while index < items.count {
@@ -244,7 +251,7 @@ public struct ResponseMarkdownRenderer: TranscriptBlockRendering {
         let alone = blockShaped && Self.isAloneInParagraph(output, sentinel: sentinel)
         let mode: MathRenderMode = span.mode == .display || alone ? .display : .inline
         let font = attributes[.font] as? NSFont
-            ?? NSFont.systemFont(ofSize: NSFont.systemFontSize)
+            ?? typography.bodyFont
         let tint = attributes[.foregroundColor] as? NSColor ?? .labelColor
         guard let render = typesetter.render(
             latex: MathCommandNormalizer.normalize(span.latex),
@@ -565,6 +572,7 @@ public struct ResponseMarkdownRenderer: TranscriptBlockRendering {
             appendCode(
                 items.map(\.text).joined(),
                 block: block,
+                syntheticTerminator: items.last?.syntheticCodeTerminator ?? false,
                 to: output,
                 decoration: decoration)
             return
@@ -748,7 +756,7 @@ public struct ResponseMarkdownRenderer: TranscriptBlockRendering {
         decoration: BlockDecoration
     ) -> NSParagraphStyle {
         let style = NSMutableParagraphStyle()
-        style.lineSpacing = 3
+        style.lineSpacing = typography.scaled(3)
         style.paragraphSpacing = 0
         style.alignment = cell.alignment
         style.textBlocks = [decoration.tableCell(
@@ -763,12 +771,16 @@ public struct ResponseMarkdownRenderer: TranscriptBlockRendering {
     private func appendCode(
         _ text: String,
         block: Block,
+        syntheticTerminator: Bool,
         to output: NSMutableAttributedString,
         decoration: BlockDecoration
     ) {
         var body = text
         if body.hasSuffix("\n") { body.removeLast() }
-        let attributes = codeAttributes(cell: decoration.codeCell(for: block.identity))
+        var attributes = codeAttributes(cell: decoration.codeCell(for: block.identity))
+        let codeBlock = TranscriptCodeBlock()
+        codeBlock.syntheticTerminator = syntheticTerminator || !text.hasSuffix("\n")
+        attributes[.transcriptCodeBlock] = codeBlock
         for line in body.components(separatedBy: "\n") {
             output.append(NSAttributedString(string: line + "\n", attributes: attributes))
         }
@@ -780,12 +792,14 @@ public struct ResponseMarkdownRenderer: TranscriptBlockRendering {
     /// one cell when they carry the same block object, so a fresh dictionary
     /// per tick would draw a new box per line.
     public func streamingCodeAttributes() -> [NSAttributedString.Key: Any] {
-        codeAttributes(cell: BlockDecoration.codeCell())
+        var attributes = codeAttributes(cell: BlockDecoration.codeCell(typography: typography))
+        attributes[.transcriptCodeBlock] = TranscriptCodeBlock()
+        return attributes
     }
 
     private func codeAttributes(cell: NSTextTableBlock) -> [NSAttributedString.Key: Any] {
         let style = NSMutableParagraphStyle()
-        style.lineSpacing = 2
+        style.lineSpacing = typography.scaled(2)
         style.paragraphSpacing = 0
         style.textBlocks = [cell]
         return [
@@ -869,7 +883,7 @@ public struct ResponseMarkdownRenderer: TranscriptBlockRendering {
 
     private func baseAttributes() -> [NSAttributedString.Key: Any] {
         [
-            .font: NSFont.systemFont(ofSize: NSFont.systemFontSize),
+            .font: typography.bodyFont,
             .foregroundColor: NSColor.labelColor,
             .paragraphStyle: paragraphStyle(for: .paragraph),
         ]
@@ -890,13 +904,13 @@ public struct ResponseMarkdownRenderer: TranscriptBlockRendering {
         var size: CGFloat
         var baseWeight: NSFont.Weight
         if monospaced {
-            size = NSFont.systemFontSize - 0.5
+            size = typography.scaled(NSFont.systemFontSize - 0.5)
             baseWeight = .regular
         } else if case .heading(let level) = block {
-            size = max(NSFont.systemFontSize + 1, 22 - CGFloat(level - 1) * 2)
+            size = typography.scaled(max(NSFont.systemFontSize + 1, 22 - CGFloat(level - 1) * 2))
             baseWeight = .semibold
         } else {
-            size = NSFont.systemFontSize
+            size = typography.bodySize
             baseWeight = .regular
         }
         if html.scriptDepth > 0 {
@@ -916,28 +930,28 @@ public struct ResponseMarkdownRenderer: TranscriptBlockRendering {
 
     private func paragraphStyle(for block: BlockKind) -> NSParagraphStyle {
         let style = NSMutableParagraphStyle()
-        style.lineSpacing = 3
-        style.paragraphSpacing = 6
+        style.lineSpacing = typography.scaled(3)
+        style.paragraphSpacing = typography.scaled(6)
 
         switch block {
         case .heading:
-            style.paragraphSpacingBefore = 8
-            style.paragraphSpacing = 4
+            style.paragraphSpacingBefore = typography.scaled(8)
+            style.paragraphSpacing = typography.scaled(4)
         case .quote:
-            style.firstLineHeadIndent = 4
-            style.headIndent = 20
-            style.tailIndent = -8
-            style.tabStops = [NSTextTab(textAlignment: .left, location: 16)]
+            style.firstLineHeadIndent = typography.scaled(4)
+            style.headIndent = typography.scaled(20)
+            style.tailIndent = typography.scaled(-8)
+            style.tabStops = [NSTextTab(textAlignment: .left, location: typography.scaled(16))]
         case .unorderedList(let indent), .orderedList(_, let indent):
-            let base = CGFloat(22 + indent * 18)
-            style.firstLineHeadIndent = CGFloat(indent * 18)
+            let base = typography.scaled(CGFloat(22 + indent * 18))
+            style.firstLineHeadIndent = typography.scaled(CGFloat(indent * 18))
             style.headIndent = base
             style.tabStops = [NSTextTab(textAlignment: .left, location: base)]
-            style.paragraphSpacing = 2
+            style.paragraphSpacing = typography.scaled(2)
         case .thematicBreak:
             style.alignment = .center
-            style.paragraphSpacingBefore = 8
-            style.paragraphSpacing = 8
+            style.paragraphSpacingBefore = typography.scaled(8)
+            style.paragraphSpacing = typography.scaled(8)
         // A table cell's style comes from `tableCellStyle`, which owns the
         // text block the cell is drawn in.
         case .paragraph, .code, .tableCell:
@@ -1103,6 +1117,12 @@ extension ResponseMarkdownRenderer {
 /// styles that reference it.
 @MainActor
 private final class BlockDecoration {
+    private let typography: ConversationTypography
+
+    init(typography: ConversationTypography) {
+        self.typography = typography
+    }
+
     private var codeCells: [Int: NSTextTableBlock] = [:]
     private var tables: [Int: NSTextTable] = [:]
     private var tableCells: [TableCellKey: NSTextTableBlock] = [:]
@@ -1113,10 +1133,12 @@ private final class BlockDecoration {
         let column: Int
     }
 
-    static func codeCell() -> NSTextTableBlock {
+    static func codeCell(typography: ConversationTypography) -> NSTextTableBlock {
         let table = NSTextTable()
         table.numberOfColumns = 1
-        table.collapsesBorders = true
+        // A single cell has no shared borders. Collapsing shifts its right
+        // stroke beyond the text container, where NSTextView clips it away.
+        table.collapsesBorders = false
         let cell = NSTextTableBlock(
             table: table,
             startingRow: 0,
@@ -1124,7 +1146,8 @@ private final class BlockDecoration {
             startingColumn: 0,
             columnSpan: 1)
         cell.setContentWidth(100, type: .percentageValueType)
-        cell.setWidth(8, type: .absoluteValueType, for: .padding)
+        cell.setWidth(typography.scaled(8), type: .absoluteValueType, for: .padding)
+        cell.setWidth(typography.scaled(TranscriptCodeBlock.headerPadding), type: .absoluteValueType, for: .padding, edge: .minY)
         cell.setWidth(1, type: .absoluteValueType, for: .border)
         cell.setBorderColor(.separatorColor)
         cell.backgroundColor = .quaternarySystemFill
@@ -1133,7 +1156,7 @@ private final class BlockDecoration {
 
     func codeCell(for identity: Int) -> NSTextTableBlock {
         if let existing = codeCells[identity] { return existing }
-        let cell = Self.codeCell()
+        let cell = Self.codeCell(typography: typography)
         codeCells[identity] = cell
         return cell
     }
@@ -1154,7 +1177,7 @@ private final class BlockDecoration {
             rowSpan: 1,
             startingColumn: column,
             columnSpan: 1)
-        cell.setWidth(6, type: .absoluteValueType, for: .padding)
+        cell.setWidth(typography.scaled(6), type: .absoluteValueType, for: .padding)
         cell.setWidth(1, type: .absoluteValueType, for: .border)
         cell.setBorderColor(.separatorColor)
         if isHeader { cell.backgroundColor = .quaternarySystemFill }

@@ -183,6 +183,11 @@ usage.prompt_tokens_details.cached_tokens
 The server retains one prefix. A different or incompatible history replaces
 it. Use `--prompt-cache-mode off` to disable reuse.
 
+Cache misses and rejected prefix publication include a reason code in the
+server log, such as `history-diverged` or `stop-string-filtered`. These cache
+diagnostics contain no prompt, response, tool payload or image content. Cache
+diagnostics are silent when prompt reuse is disabled.
+
 ## Tool calls
 
 The server can return OpenAI-style function calls, but it cannot authorize or
@@ -222,6 +227,9 @@ Chat Completions supports JSON and Server-Sent Events responses. Set
 `"stream_options": {"include_usage": true}` to receive a final usage chunk.
 
 Requests may contain system, developer, user, assistant, and tool messages.
+Multiple leading system messages retain their order. System and developer
+guidance must precede the conversation; guidance inserted after a user,
+assistant or tool message is rejected.
 Supported options include `temperature`, `top_p`, `top_k`,
 `repetition_penalty`, `seed`, `stop`, `max_tokens`,
 `max_completion_tokens`, and function-tool fields.
@@ -244,9 +252,15 @@ The server supports one model and one choice. It does not support the Responses
 API, legacy Completions, embeddings, structured output,
 batching, log probabilities, or remote model switching.
 
-Context length can be 4K, 8K, 16K, 32K, or 64K. The default is 16K. Larger FP16
-KV contexts use more memory. On an 8 GB Mac, run one model process at a time and
-watch memory pressure.
+Context length can be 4K, 8K, 16K, 32K, 64K, 96K, 128K, 192K, or 256K.
+The default is 16K. Before loading the model, the server checks whether the
+selected context and expert cache fit its memory estimate for your Mac.
+Larger contexts need more memory for the FP16 KV cache. See
+[context length and memory](RUNTIME_CONTROLS.md#context-length-and-memory)
+for the calculation and diagnostic override, and the
+[long-context report](experiments/summaries/10-long-context.md) for measured
+results and validation limits. On an 8 GB Mac, run one model process at a
+time and watch memory pressure.
 
 For long requests, stderr reports the request lifecycle as prepared, queued,
 generating, completed, or failed. It includes token counts and timing, but not

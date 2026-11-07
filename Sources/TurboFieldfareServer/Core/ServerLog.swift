@@ -25,17 +25,39 @@ enum ServerLog {
     static func completed(id: String,
                           duration: Duration,
                           completion: ServerCompletion) {
+        write(completedMessage(id: id, duration: duration, completion: completion))
+    }
+
+    /// Split out so the throughput arithmetic can be checked without a log sink
+    /// and without a decode. `pp_tok_s` divides by the tokens actually
+    /// prefilled: a prompt-cache hit contributes no prefill work, so counting
+    /// cached tokens as prefilled would report a rate the runtime never
+    /// achieved. Carries counts and durations only, never content.
+    static func completedMessage(id: String,
+                                 duration: Duration,
+                                 completion: ServerCompletion) -> String {
         let usage = completion.usage
-        write("request \(id) completed in \(format(duration)) "
+        // Clamped because both counts come from the runtime: a cached count
+        // above the prompt would otherwise log a negative token count and a
+        // negative rate rather than the zero work that was done.
+        let computedPrefillTokens = max(
+            usage.promptTokens - usage.promptTokensDetails.cachedTokens, 0)
+        let prefillTokensPerSecond = completion.prefillSeconds > 0
+            ? Double(computedPrefillTokens) / completion.prefillSeconds
+            : 0
+        let decodeTokensPerSecond = completion.decodeSeconds > 0
+            ? Double(usage.completionTokens) / completion.decodeSeconds
+            : 0
+        return "request \(id) completed in \(format(duration)) "
             + "prompt=\(usage.promptTokens) "
             + "cached=\(usage.promptTokensDetails.cachedTokens) "
             + "completion=\(usage.completionTokens) "
-            + "finish=\(completion.finishReason)")
+            + "pp=\(formatSeconds(completion.prefillSeconds)) "
+            + "pp_tok_s=\(formatRate(prefillTokensPerSecond)) "
+            + "tg=\(formatSeconds(completion.decodeSeconds)) "
+            + "tg_tok_s=\(formatRate(decodeTokensPerSecond)) "
+            + "finish=\(completion.finishReason)"
     }
-
-    /// The session is an actor, so generation is serialized: this line always
-    /// belongs to the request between the preceding `generating` and the
-    /// following `completed`. Carries a reason code only, never prompt content.
 
     static func visionPackInvalid(at url: URL, error: Error) {
         write("vision pack at \(url.path) is invalid: \(String(reflecting: error))")
@@ -50,12 +72,24 @@ enum ServerLog {
         write("vision runtime is unsupported: the image tower requires an M2 or newer Mac")
     }
 
-    /// A prefix that could not be continued because its bridge failed to
-    /// render. Carries the underlying error, because this miss means the
-    /// template and the cached turn disagree, which no other miss does.
-    static func promptCacheBridgeFailed(error: Error) {
-        write("prompt cache miss reason=bridge-render-failed "
-            + "error=\(String(reflecting: error))")
+    /// The session is an actor, so generation is serialized: this line always
+    /// belongs to the request between the preceding `generating` and the
+    /// following `completed`. Carries a reason code only, never prompt content.
+    static func promptCacheMiss(reason: ServerPromptCacheMissReason) {
+        write(promptCacheMissMessage(reason: reason))
+    }
+
+    static func promptCacheMissMessage(reason: ServerPromptCacheMissReason) -> String {
+        "prompt cache miss reason=\(reason.rawValue)"
+    }
+
+    static func promptCachePublication(_ result: ServerPromptCachePublishResult) {
+        if let message = promptCachePublicationMessage(result) { write(message) }
+    }
+
+    static func promptCachePublicationMessage(_ result: ServerPromptCachePublishResult) -> String? {
+        guard case .rejected(let reason) = result else { return nil }
+        return "prompt cache publication rejected reason=\(reason.rawValue)"
     }
 
     /// A request whose client stopped listening. Kept distinct from `failed`
@@ -85,7 +119,15 @@ enum ServerLog {
     private static func format(_ duration: Duration) -> String {
         let seconds = Double(duration.components.seconds)
             + Double(duration.components.attoseconds) / 1e18
-        return String(format: "%.3fs", seconds)
+        return formatSeconds(seconds)
+    }
+
+    private static func formatSeconds(_ seconds: Double) -> String {
+        String(format: "%.3fs", seconds)
+    }
+
+    private static func formatRate(_ rate: Double) -> String {
+        String(format: "%.3f", rate)
     }
 
     private static func write(_ message: String) {
